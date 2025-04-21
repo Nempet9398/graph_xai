@@ -1,0 +1,25 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Logs and outputs
+*.log
+*.csv
+results/
+wandb/
+*.pt
+
+# Model checkpoints
+model/
+
+# Shell scripts (optional)
+*.sh
+
+# Raw or generated data
+synthetic_data/
+data/
+datasets/
+dataset/
+
+# Optional visualization/test datasets
+GraphXAI/
