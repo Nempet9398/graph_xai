@@ -8,13 +8,10 @@ __pycache__/
 results/
 wandb/
 *.pt
-
 # Model checkpoints
 model/
-
 # Shell scripts (optional)
 *.sh
-
 # Raw or generated data
 synthetic_data/
 data/

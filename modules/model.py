@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import Linear, BatchNorm1d, Sequential, ReLU, Dropout
 from torch_geometric.nn import global_mean_pool, global_add_pool, global_max_pool
-from torch_geometric.nn import GCNConv, GINConv, GATConv
+from torch_geometric.nn import GCNConv, GINConv, GATConv, SAGEConv
 
 from ogb.utils.features import get_atom_feature_dims
 
@@ -86,6 +86,8 @@ class GNN_layer(nn.Module):
             )
         elif model == 'GAT':
             self.conv = GATConv(hidden, hidden, heads=4, concat=False)
+        elif model == 'SAGE':
+            self.conv = SAGEConv(hidden, hidden)
             
         self.dropout = dropout
         

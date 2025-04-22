@@ -63,6 +63,8 @@ parser.add_argument('--pooling', type=str, default="mean", help="mean, max, sum"
 parser.add_argument('--dataset', type=str, default='MUTAG', help='name of dataset. For now, only classification.')
 parser.add_argument('--eval_metric', type=str, default='auc')
 
+
+parser.add_argument('--top_motif', type=int, default=1)
 parser.add_argument('--group_param', 
                     type=lambda s: [int(item) for item in s.split(',')], 
                     default=[1, 10, 50, 100, 150, 200, 250],
@@ -73,13 +75,13 @@ parser.add_argument('--lasso_param',
                     default=[0.01, 0.1, 1, 3, 5, 10, 50],
                     help='Comma-separated list of lasso regularization parameters')
 
-parser.add_argument('--top_motif', type=int, default=1)
-
 
 try:
     args = parser.parse_args()
 except:
     args = parser.parse_args([])
+
+
 #%%
 # ============================ #
 #      Device Configuration    #
@@ -101,8 +103,33 @@ name = f'{args.dataset}_{args.model}'
 
 def main(args):
 
+    # Set group_param and lasso_param based on dataset
+    if args.dataset.lower() == 'alkane':
+        args.group_param = [1, 10, 50, 100, 150, 200, 250]
+        args.lasso_param = [0.001,0.005, 0.01, 0.05, 0.1]
+    elif args.dataset.lower() == 'ames':
+        args.group_param = [1, 10, 50, 100, 150, 200, 250]
+        args.lasso_param = [0.1,1,10,50,100,200,500]
+    elif args.dataset.lower() == 'bace':
+        args.group_param = [ 150, 200, 250, 300,500]
+        args.lasso_param = [1,10,50,100,150,200]
+    elif args.dataset.lower() == 'bbbp':
+        args.group_param = [10, 50, 100, 200]
+        args.lasso_param = [0.05, 0.5, 5]
+    elif args.dataset.lower() == 'benzene':
+        args.group_param = [200,250,300,400,500]
+        args.lasso_param = [10,50,100,150,200] 
+    elif args.dataset.lower() == 'fluoride':
+        args.group_param = [1, 10, 50, 100, 150, 200, 250]
+        args.lasso_param = [ 1, 5, 10,30,50]
+    else:  # default (e.g., MUTAG)
+        args.group_param = [1, 10, 50, 100, 150, 200, 250]
+        args.lasso_param = [0.01, 0.1, 1, 3, 5]
+
     for code_seed in range(5):
         
+        print(f'Start experiment with seed {code_seed}, Dataset {args.dataset}, Model {args.model}, Pooling {args.pooling}')
+
         set_seed(code_seed)
 
         # ----- Dataset Loading and Preparation -----
@@ -124,12 +151,14 @@ def main(args):
         args.num_task = dataset[0].y.view(1, -1).shape[1]
         args.num_classes = 2
 
+
+
         # ----- Model and Atom Encoder Loading or Training -----
         model_name = f'{args.model}_{args.dataset}_{args.pooling}_{code_seed}_model.pt'
         atom_encoder_name = f'{args.model}_{args.dataset}_{code_seed}_atom_encoder.pt'
         model_path = os.path.join('model', 'graph', model_name)
         atom_encoder_path = os.path.join('model', 'atom_encoder', atom_encoder_name)
-
+        
         # Initialize wandb
         wandb.init(
             project="GRAPH_XAI_GROUP",
@@ -192,7 +221,7 @@ def main(args):
             device=device,
             args=args,
             test_func=test_module.test_model_with_noise,
-            reg_2_list= args.group_param,
+            reg_2_list=args.group_param,
         )
 
         # ----- Alpha Importance -----

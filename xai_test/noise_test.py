@@ -9,7 +9,7 @@ def forward_with_noise(model, atom_encoder, data, important_nodes, device):
     if important_nodes is not None:
         important_nodes = important_nodes.clone().detach().to(device)
         x[important_nodes] = 0 # x[important_nodes] + 10 * torch.randn_like(x[important_nodes])
-        print("I erase " , len(important_nodes), " nodes")
+
 
     for conv in model.convs:
         x = conv(x, data.edge_index.to(device))
@@ -48,7 +48,7 @@ def forward_with_import_noise(model, atom_encoder, data, important_nodes , devic
     return co_logs
 
 
-def eval_f1_dataset(model, atom_encoder, dataset, device):
+def eval_f1_dataset(model, atom_encoder, dataset, device, args):
     model.eval()
     atom_encoder = atom_encoder.to(device)
     model = model.to(device)
@@ -65,7 +65,14 @@ def eval_f1_dataset(model, atom_encoder, dataset, device):
             x = atom_encoder(data.x.to(device))
             for conv in model.convs:
                 x = conv(x, data.edge_index.to(device))
-            x = x.mean(dim=0, keepdim=True)
+            if args.pooling == 'mean':
+                x = x.mean(dim=0, keepdim=True)
+            elif args.pooling == 'sum':
+                x = x.sum(dim=0, keepdim=True)
+            elif args.pooling == 'max':
+                x = x.max(dim=0, keepdim=True)[0]
+            else:
+                raise ValueError(f"Unsupported pooling method: {args.pooling}")
             co_logs = model.readout_layer(x)
             pred = torch.cat([pred, co_logs.detach().to('cpu')], dim=0)
     for i in range(1):  # Assuming num_task is 1 since it's not provided
@@ -75,7 +82,7 @@ def eval_f1_dataset(model, atom_encoder, dataset, device):
     return correct   # Assuming num_task is 1 since it's not provided
 
 
-def eval_acc_dataset(model, atom_encoder, dataset, device):
+def eval_acc_dataset(model, atom_encoder, dataset, device, args):
     model.eval()
     atom_encoder = atom_encoder.to(device)
     model = model.to(device)
@@ -90,7 +97,14 @@ def eval_acc_dataset(model, atom_encoder, dataset, device):
             x = atom_encoder(data.x.to(device))
             for conv in model.convs:
                 x = conv(x, data.edge_index.to(device))
-            x = x.mean(dim=0, keepdim=True)
+            if args.pooling == 'mean':
+                x = x.mean(dim=0, keepdim=True)
+            elif args.pooling == 'sum':
+                x = x.sum(dim=0, keepdim=True)
+            elif args.pooling == 'max':
+                x = x.max(dim=0, keepdim=True)[0]
+            else:
+                raise ValueError(f"Unsupported pooling method: {args.pooling}")
             co_logs = model.readout_layer(x)
             y_pred = co_logs.max(1)[1]
             correct += (y_pred[mask].to(device) == target.to(device)).sum().item()
@@ -100,8 +114,8 @@ def eval_acc_dataset(model, atom_encoder, dataset, device):
 
 
 def test_model_with_noise(model, atom_encoder , dataset, device, number_list, importance_list, args):
-    baseline_accuracy = eval_acc_dataset(model,atom_encoder,  dataset, device)
-    baseline_f1_score = eval_f1_dataset(model,atom_encoder,  dataset, device)
+    baseline_accuracy = eval_acc_dataset(model,atom_encoder,  dataset, device,args)
+    baseline_f1_score = eval_f1_dataset(model,atom_encoder,  dataset, device,args)
     all_y = torch.tensor([]).to('cpu')
     all_pred = torch.tensor([]).to('cpu')
 

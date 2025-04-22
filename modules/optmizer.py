@@ -123,6 +123,7 @@ def find_best_alpha_importance(
             device=device,
             number_list=node_number,
             importance_list=alpha_importance,
+            args=args
         )
 
         if alpha_drop > best_alpha_drop:
@@ -890,10 +891,11 @@ class MCTS:
 
     def best_node(self, size: int) -> MCTSNode:
         if self.skip_to_leaves and size != self.n_min:
-            print('Warning: Some scores were skipped in the exploration phase. Set skip_to_leaves to False!')
+            print('')
+            # print('Warning: Some scores were skipped in the exploration phase. Set skip_to_leaves to False!')
 
         if size >= len(self.root.node_set):
-            print('Warning: The requested explanation-set is too large.')
+            print('')
             return self.root
         elif size <= 0:
             raise RecursionError('There is no subgraph of the requested size')
