@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from torch_geometric.data import Data
 import numpy as np
 
-def grad_cam(model, data,atom_encoder, device):
+def grad_cam(model, data, device, atom_encoder=None):
         def backward_hook(module, grad_input, grad_output):
             global gradients
             gradients = grad_output[0]
@@ -16,13 +16,17 @@ def grad_cam(model, data,atom_encoder, device):
         target_layer.register_forward_hook(forward_hook)
         target_layer.register_backward_hook(backward_hook)
 
-        atom_encoder = atom_encoder.to(device)
         model = model.to(device)
         data = data.to(device)
-
+        data= data.to(device)
         model.eval()
-        x = atom_encoder(data.x)
-        output= model(x, data.edge_index, batch=data.batch)
+        if atom_encoder is not None:
+            atom_encoder = atom_encoder.to(device)
+            x = atom_encoder(data.x)
+        else:
+            x = data.x.to(device)
+
+        output= model(x.to(device), data.edge_index.to(device)).to(device) # batch=data.batch)
         target_class = output.argmax(dim=1)
         assert target_class.max().item() < output.shape[1]
         loss = torch.nn.functional.cross_entropy(output, target_class)

@@ -22,7 +22,8 @@ import pandas as pd
 import networkx as nx
 import seaborn as sns
 import numpy as np
-
+import os
+import pickle
 dataset_module = importlib.import_module('graph_dataset.dataset')
 importlib.reload(dataset_module)
 model_module = importlib.import_module('modules.model')
@@ -39,8 +40,6 @@ gradcam = importlib.import_module('xai_test.gradcam')
 importlib.reload(gradcam)
 test_module = importlib.import_module('xai_test.noise_test')
 importlib.reload(test_module)
-
-
 #%%
 #python main.py  --epochs 300 --model GCN --dataset MUTAG --top_motif 1 --layers 3 --pooling mean
 
@@ -53,7 +52,7 @@ parser.add_argument('--batch_size', type=int, default=128)
 parser.add_argument('--layers', type=int, default=3)
 parser.add_argument('--hidden', type=int, default=256)
 
-parser.add_argument('--epochs', type=int, default=100)
+parser.add_argument('--epochs', type=int, default=300)
 parser.add_argument('--lr', type=float, default=0.001)
 parser.add_argument('--weight_decay', type=float, default=0)
 
@@ -82,7 +81,6 @@ except:
     args = parser.parse_args([])
 
 
-#%%
 # ============================ #
 #      Device Configuration    #
 # ============================ #
@@ -100,38 +98,37 @@ name = f'{args.dataset}_{args.model}'
 # ============================ #
 #         Main Function        #
 # ============================ #
-
+#%%
 def main(args):
 
-    # Set group_param and lasso_param based on dataset
-    if args.dataset.lower() == 'alkane':
-        args.group_param = [1, 10, 50, 100, 150, 200, 250]
-        args.lasso_param = [0.001,0.005, 0.01, 0.05, 0.1]
-    elif args.dataset.lower() == 'ames':
-        args.group_param = [1, 10, 50, 100, 150, 200, 250]
-        args.lasso_param = [0.1,1,10,50,100,200,500]
-    elif args.dataset.lower() == 'bace':
-        args.group_param = [ 150, 200, 250, 300,500]
-        args.lasso_param = [1,10,50,100,150,200]
-    elif args.dataset.lower() == 'bbbp':
-        args.group_param = [10, 50, 100, 200]
-        args.lasso_param = [0.05, 0.5, 5]
-    elif args.dataset.lower() == 'benzene':
-        args.group_param = [200,250,300,400,500]
-        args.lasso_param = [10,50,100,150,200] 
-    elif args.dataset.lower() == 'fluoride':
-        args.group_param = [1, 10, 50, 100, 150, 200, 250]
-        args.lasso_param = [ 1, 5, 10,30,50]
-    else:  # default (e.g., MUTAG)
-        args.group_param = [1, 10, 50, 100, 150, 200, 250]
-        args.lasso_param = [0.01, 0.1, 1, 3, 5]
+    # # Set group_param and lasso_param based on dataset
+    # if args.dataset.lower() == 'alkane':
+    #     args.group_param = [0.1,1,5,  10, 50, 100,  200,250,  300]
+    #     args.lasso_param = [0.0005,0.001,0.005, 0.01, 0.05, 0.1,0.5,1]
+    # elif args.dataset.lower() == 'ames':
+    #     args.group_param = [1,30,50,70,100, 130, 150,170, 200,250]
+    #     args.lasso_param = [0.1,1,5,10,30,50,70,100,150]
+    # elif args.dataset.lower() == 'bace':
+    #     args.group_param = [ 1, 10, 50,100,150, 200, 250, 300,350,400,450,500,550]
+    #     args.lasso_param = [0.1,1,5,10,50,100,150,200,250]
+    # elif args.dataset.lower() == 'bbbp':
+    #     args.group_param = [1,5,10, 30,50, 70, 100, 150, 200,250]
+    #     args.lasso_param = [0.01,0.05, 0.1,0.5, 1,3,5,10]
+    # elif args.dataset.lower() == 'benzene':
+    #     args.group_param = [100, 200,250,300,400,500,600,700]
+    #     args.lasso_param = [1,10,30,50,70,100,150,200,250] 
+    # elif args.dataset.lower() == 'fluoride':
+    #     args.group_param = [0.1,1, 10,  100, 150, 200, 250,300]
+    #     args.lasso_param = [0.1,1,10,15,30,50,70,100]
+    # else:  # default (e.g., MUTAG)
+    #     args.group_param = [0.1,1, 10, 50, 100,150, 200,250,300]
+    #     args.lasso_param = [0.001,0.01, 0.1, 1, 3, 5,10]
 
     for code_seed in range(5):
-        
+
         print(f'Start experiment with seed {code_seed}, Dataset {args.dataset}, Model {args.model}, Pooling {args.pooling}')
 
         set_seed(code_seed)
-
         # ----- Dataset Loading and Preparation -----
         if args.dataset.upper() == 'MUTAG':
             dataset, split_idx = dataset_module.get_MUTAG()
@@ -147,18 +144,19 @@ def main(args):
             dataset, split_idx = dataset_module.get_fluoride()
         else:
             dataset, split_idx = dataset_module.get_MolculeNetData(args.dataset)       
-
+        
         args.num_task = dataset[0].y.view(1, -1).shape[1]
         args.num_classes = 2
-
-
+        args.group_param = [0.001,0.01,0.05,0.1,0.5,1,5,10,15,30,50]
+        args.lasso_param = [0.001,0.01,0.05,0.1,0.5,1,5,10,15,30,50]
 
         # ----- Model and Atom Encoder Loading or Training -----
-        model_name = f'{args.model}_{args.dataset}_{args.pooling}_{code_seed}_model.pt'
-        atom_encoder_name = f'{args.model}_{args.dataset}_{code_seed}_atom_encoder.pt'
-        model_path = os.path.join('model', 'graph', model_name)
-        atom_encoder_path = os.path.join('model', 'atom_encoder', atom_encoder_name)
-        
+        model_name = f'model_{code_seed}.pt'
+        atom_encoder_name = f'atom_encoder_{code_seed}.pt'
+        model_path = os.path.join('model','v3', 'group', args.dataset, args.pooling, 'model', model_name)
+        atom_encoder_path = os.path.join('model','v3', 'group', args.dataset, args.pooling, 'atom_encoder', atom_encoder_name)
+
+
         # Initialize wandb
         wandb.init(
             project="GRAPH_XAI_GROUP",
@@ -176,15 +174,18 @@ def main(args):
                 "eval_metric": args.eval_metric,
                 "top_motif": args.top_motif,
                 "seed": code_seed,
-            }
+            }, tags=["GROUP_TEST_v3"]
         )
-
-        # Check if the model and atom encoder exist
+        #Check if the model and atom encoder exist
         if os.path.exists(model_path) and os.path.exists(atom_encoder_path):
             print(f"Loading existing model and atom encoder from {model_path} and {atom_encoder_path}")
             atom_encoder = torch.load(atom_encoder_path).to(device)
             best_model = torch.load(model_path).to(device)
+
+            best_model.eval()
+            atom_encoder.eval()
         else:
+
             print("Model and atom encoder not found. Creating new ones.")
             atom_encoder = model_module.AtomEncoder(args.hidden).to(device)
             model = model_module.BasicGNN(args).to(device)
@@ -193,7 +194,6 @@ def main(args):
             test_auc, best_model, best_encoder = train_module.train_function(
                 dataset, split_idx, model, atom_encoder, args, device
             )
-
             # Save the trained model and atom encoder
             os.makedirs(os.path.dirname(model_path), exist_ok=True)
             os.makedirs(os.path.dirname(atom_encoder_path), exist_ok=True)
@@ -206,11 +206,49 @@ def main(args):
         valid_dataset = dataset[split_idx['valid']]
         test_dataset = dataset[split_idx['test']]
 
+        best_model = best_model.to(device)
+
+        # import matplotlib.font_manager as fm
+
+        # # 사용 가능한 폰트 리스트 출력
+        # available_fonts = sorted([f.name for f in fm.fontManager.ttflist])
+        # print("Available Fonts:")
+        # for font in available_fonts:
+        #     print(font)
+        # #%%
+        # # 폰트 설정 (예: Noto Sans)
+        # plt.rcParams['font.family'] = 'DejaVu Sans'
+        # # Display grad_numpy_mean and grad_numpy_sum side by side, no colorbars
+        # fig, axs = plt.subplots(1, 2, figsize=(4, 1.5), dpi=400)
+
+        # sns.heatmap(grad_numpy_mean, cmap="crest", annot=False, cbar=False, ax=axs[0])
+        # axs[0].set_xlabel("Feature Index", fontsize=8)
+        # axs[0].set_ylabel("Node Index", fontsize=8)
+        # axs[0].tick_params(labelsize=7, rotation=90)
+
+        # sns.heatmap(grad_numpy_sum, cmap="crest", annot=False, cbar=False, ax=axs[1])
+        # axs[1].set_xlabel("Feature Index", fontsize=8)
+        # axs[1].tick_params(labelsize=7, left=False, labelleft=False)
+
+        # plt.tight_layout()
+        # plt.show()
+        # #%%
+        # # Save the figure as a PDF
+        # output_dir = "/home1/hyukoh12/myubai/CH/graph/fig_folder"
+        # os.makedirs(output_dir, exist_ok=True)
+        # output_path = os.path.join(output_dir, "gradient_visualization.png")
+        # plt.savefig(output_path, format="png")
+        # plt.close()
+
         # ----- Node Embedding Computation -----
         embedding_list = [
             best_model(atom_encoder(data.x.to(device)).to(device), data.edge_index.to(device), infer=True).detach() 
             for data in test_dataset
         ]
+
+        # Create directory for saving importance values
+        importance_dir = os.path.join('importance','v3', args.dataset, args.model, args.pooling)
+        os.makedirs(importance_dir, exist_ok=True)
 
         # ----- Group Lasso and Lasso Importance -----
         group_alpha_importance, best_reg_2, group_base, group_average, group_drop, best_node_number = optimize.find_best_group_alpha_importance(
@@ -223,6 +261,9 @@ def main(args):
             test_func=test_module.test_model_with_noise,
             reg_2_list=args.group_param,
         )
+
+        with open(os.path.join(importance_dir, 'group_alpha_importance.pkl'), 'wb') as f:
+            pickle.dump(group_alpha_importance, f)
 
         # ----- Alpha Importance -----
         alpha_importance, best_reg_1, alpha_base, alpha_avg, alpha_drop = optimize.find_best_alpha_importance(
@@ -237,32 +278,55 @@ def main(args):
             reg_1_list=args.lasso_param,
         )
 
+        with open(os.path.join(importance_dir, 'alpha_importance.pkl'), 'wb') as f:
+            pickle.dump(alpha_importance, f)
+
         # ----- Explanation Method Importance Calculation -----
         pg_node_importances = optimize.compute_pgexplainer_importance(test_dataset, best_model, atom_encoder)
 
+        with open(os.path.join(importance_dir, 'pg_node_importances.pkl'), 'wb') as f:
+            pickle.dump(pg_node_importances, f)
+
         graph_mask_importance = optimize.compute_graphmask_importance(test_dataset, best_model, atom_encoder)
 
-        sa_importance = optimize.compute_captum_importance(test_dataset, best_model, atom_encoder, 'Saliency')
+        with open(os.path.join(importance_dir, 'graph_mask_importance.pkl'), 'wb') as f:
+            pickle.dump(graph_mask_importance, f)
 
-        gbp_importance = optimize.compute_captum_importance(test_dataset, best_model, atom_encoder, 'GuidedBackprop')
+        sa_importance = optimize.compute_captum_importance(test_dataset, best_model, 'Saliency', atom_encoder)
+        with open(os.path.join(importance_dir, 'sa_importance.pkl'), 'wb') as f:
+            pickle.dump(sa_importance, f)
 
-        subgraphx_importance = optimize.compute_subgraphx_importance(test_dataset, best_model, atom_encoder, best_node_number, device)
+        gbp_importance = optimize.compute_captum_importance(test_dataset, best_model, 'GuidedBackprop', atom_encoder)
+
+        with open(os.path.join(importance_dir, 'gbp_importance.pkl'), 'wb') as f:
+            pickle.dump(gbp_importance, f)
+
+        subgraphx_importance = optimize.compute_subgraphx_importance(test_dataset, best_model, best_node_number, device, atom_encoder)
+
+        with open(os.path.join(importance_dir, 'subgraphx_importance.pkl'), 'wb') as f:
+            pickle.dump(subgraphx_importance, f)
 
         atom_encoder = atom_encoder.to(device)
         best_model = best_model.to(device)
-        gnn_explainer_importance = optimize.compute_gnnexplainer_importance(test_dataset, best_model, atom_encoder, device)
-    
-        gradcam_importance = optimize.compute_gradcam_importance(test_dataset, best_model, atom_encoder, device)
 
+        gnn_explainer_importance = optimize.compute_gnnexplainer_importance(test_dataset, best_model, device, atom_encoder)
+
+        with open(os.path.join(importance_dir, 'gnn_explainer_importance.pkl'), 'wb') as f:
+            pickle.dump(gnn_explainer_importance, f)
+
+        gradcam_importance = optimize.compute_gradcam_importance(test_dataset, best_model, device, atom_encoder)
+
+        with open(os.path.join(importance_dir, 'gradcam_importance.pkl'), 'wb') as f:
+            pickle.dump(gradcam_importance, f)
 
         # ----- Robustness Testing with Noise Injection -----      
-        grad_base, grad_avg, grad_drop = test_module.test_model_with_noise(best_model, atom_encoder, test_dataset, device, best_node_number, gradcam_importance, args)
-        gnn_base, gnn_avg, gnn_drop = test_module.test_model_with_noise(best_model, atom_encoder, test_dataset, device, best_node_number, gnn_explainer_importance, args)
-        sub_base, sub_avg, sub_drop = test_module.test_model_with_noise(best_model, atom_encoder, test_dataset, device, best_node_number, subgraphx_importance, args)
-        gbp_base, gbp_avg, gbp_drop = test_module.test_model_with_noise(best_model, atom_encoder, test_dataset, device, best_node_number, gbp_importance, args)
-        sa_base, sa_avg, sa_drop = test_module.test_model_with_noise(best_model, atom_encoder, test_dataset, device, best_node_number, sa_importance, args)
-        mask_base, mask_avg, mask_drop = test_module.test_model_with_noise(best_model, atom_encoder, test_dataset, device, best_node_number, graph_mask_importance, args)
-        pg_base, pg_avg, pg_drop = test_module.test_model_with_noise(best_model, atom_encoder, test_dataset, device, best_node_number, pg_node_importances, args)
+        grad_base, grad_avg, grad_drop = test_module.test_model_with_noise(best_model,  test_dataset, device, best_node_number, gradcam_importance, args, atom_encoder)
+        gnn_base, gnn_avg, gnn_drop = test_module.test_model_with_noise(best_model,  test_dataset, device, best_node_number, gnn_explainer_importance, args, atom_encoder)
+        sub_base, sub_avg, sub_drop = test_module.test_model_with_noise(best_model,  test_dataset, device, best_node_number, subgraphx_importance, args,atom_encoder)
+        gbp_base, gbp_avg, gbp_drop = test_module.test_model_with_noise(best_model,  test_dataset, device, best_node_number, gbp_importance, args,atom_encoder)
+        sa_base, sa_avg, sa_drop = test_module.test_model_with_noise(best_model,  test_dataset, device, best_node_number, sa_importance, args,atom_encoder)
+        mask_base, mask_avg, mask_drop = test_module.test_model_with_noise(best_model, test_dataset, device, best_node_number, graph_mask_importance, args,atom_encoder)
+        pg_base, pg_avg, pg_drop = test_module.test_model_with_noise(best_model,  test_dataset, device, best_node_number, pg_node_importances, args,atom_encoder)
 
         print('Seed', code_seed, 'Test with Noise')
         print('Group Lasso', group_base, group_average, group_drop)
@@ -295,6 +359,8 @@ def main(args):
         })
 
         wandb.finish()
+
+
 
 
 if __name__ == "__main__":

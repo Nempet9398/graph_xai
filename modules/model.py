@@ -94,7 +94,7 @@ class GNN_layer(nn.Module):
     def forward(self, x, edge_index):
         # x = self.bn(x)
         x = self.conv(x, edge_index)
-        x = F.dropout(F.relu(x), p=self.dropout, training=self.training)
+        # x = F.dropout(F.relu(x), p=self.dropout, training=self.training)
         return x
 
 class BasicGNN(nn.Module):
@@ -114,7 +114,7 @@ class BasicGNN(nn.Module):
             raise ValueError(f"Unsupported pooling type: {args.pooling}")
         
         self.dropout = dropout
-        self.atom_encoder = AtomEncoder(hidden)
+        # self.atom_encoder = AtomEncoder(hidden)
         self.convs = torch.nn.ModuleList()
         for _ in range(num_conv_layers):
             self.convs.append(
@@ -146,6 +146,70 @@ class BasicGNN(nn.Module):
             elif self.args.pooling == 'sum':
                 x = x.sum(dim=0, keepdim=True)  # Batch가 없을 경우 sum pooling
         
+        logit = self.readout_layer(x)
+        if self.flatten_out_shape:
+            return logit
+        else:
+            return logit.reshape(-1, self.args.num_task, self.args.num_classes)
+        
+
+        
+
+# BasicGNN_MLP for float features (e.g., UPFD dataset)
+class BasicGNN_MLP(nn.Module):
+    def __init__(self, args, dropout=0.5):
+        super().__init__()
+        num_conv_layers = args.layers
+        hidden = args.hidden
+        self.args = args
+
+        if args.pooling == 'max':
+            self.global_pool = global_max_pool
+        elif args.pooling == 'mean':
+            self.global_pool = global_mean_pool
+        elif args.pooling == 'sum':
+            self.global_pool = global_add_pool
+        else:
+            raise ValueError(f"Unsupported pooling type: {args.pooling}")
+        
+        self.dropout = dropout
+        self.mlp_proj = nn.Sequential(
+            nn.Linear(args.input_dim, hidden),
+            nn.BatchNorm1d(hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, hidden),
+            nn.BatchNorm1d(hidden)
+        )
+        self.convs = torch.nn.ModuleList()
+        for _ in range(num_conv_layers):
+            self.convs.append(
+                GNN_layer(args.model, hidden, dropout))
+        
+        self.readout_layer = MLP_layer(hidden, args.num_classes * args.num_task)
+        self.flatten_out_shape = True
+
+    def forward(self, x, edge_index, batch=None, infer=False, silence_node=None):
+        x = self.mlp_proj(x)
+
+        if silence_node is not None: 
+            x[silence_node] = torch.zeros_like(x[silence_node])
+        
+        for conv in self.convs:
+            x = conv(x, edge_index)
+
+        if infer:
+            return x
+        
+        if batch is not None:
+            x = self.global_pool(x, batch)
+        else:
+            if self.args.pooling == 'max':
+                x = x.max(dim=0, keepdim=True)[0]
+            elif self.args.pooling == 'mean':
+                x = x.mean(dim=0, keepdim=True)
+            elif self.args.pooling == 'sum':
+                x = x.sum(dim=0, keepdim=True)
+
         logit = self.readout_layer(x)
         if self.flatten_out_shape:
             return logit

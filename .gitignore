@@ -8,6 +8,7 @@ __pycache__/
 results/
 wandb/
 *.pt
+*.pkl
 # Model checkpoints
 model/
 # Shell scripts (optional)

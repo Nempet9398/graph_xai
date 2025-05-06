@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
+import wandb
 import torch
 import torch.optim as optim
 from torch_geometric.explain import Explainer
@@ -27,6 +27,141 @@ from torch_geometric.explain import Explainer, CaptumExplainer
 from torch_geometric.explain.algorithm import PGExplainer,GraphMaskExplainer
 from torch_geometric.explain.config import ModelConfig, ExplanationType, MaskType
 import torch.nn.functional as F
+
+# =============================================================================
+# 0. 그냥 alpha 구하기 (원자 X)
+# =============================================================================
+
+import torch.nn.functional as F
+from torch.nn import Parameter
+
+def optimize_normal_graph(data, test_data, device, args):
+    if test_data.y.isnan().any():
+        return None
+
+    data = data.to(device)
+    embedding = data  # 이미 임베딩된 상태
+
+    n = embedding.shape[0]
+
+    if args.pooling == 'mean':
+        uniform = torch.mean(embedding, dim=0)
+    elif args.pooling == 'max':
+        uniform = torch.max(embedding, dim=0).values
+    elif args.pooling == 'sum':
+        uniform = torch.sum(embedding, dim=0)
+    else:
+        raise ValueError(f"Unsupported pooling method: {args.pooling}")
+
+    alpha = Parameter(torch.ones(n, device=device))
+    optimizer = torch.optim.Adam([alpha], lr=0.01)
+    lambda_reg = args.reg_1
+
+    for _ in range(300):
+        optimizer.zero_grad()
+        weighted_sum = torch.sum(alpha.unsqueeze(1) * embedding, dim=0)
+        loss = torch.norm(weighted_sum - uniform, p=2) ** 2 / embedding.size(1) + lambda_reg * torch.norm(alpha, p=1)
+        loss.backward()
+        optimizer.step()
+
+    return alpha.detach().cpu()
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from tqdm import tqdm
+
+def compute_normal_importance_parallel(embedding_list,  test_dataset, device, args, n_jobs=20):
+    results = [None] * len(test_dataset)
+
+    def worker(i):
+        embedding_data = embedding_list[i].to(device)
+        test_data = test_dataset[i]
+        return i, optimize_normal_graph(embedding_data, test_data, device, args)
+
+    with ThreadPoolExecutor(max_workers=n_jobs) as executor:
+        futures = [executor.submit(worker, i) for i in range(len(test_dataset))]
+        for f in tqdm(as_completed(futures), total=len(futures), desc="GPU 병렬 L1 최적화 중"):
+            i, res = f.result()
+            results[i] = res
+
+    return [r for r in results if r is not None]
+
+# =============================================================================
+# 0.2 alpha 구하기 함수화
+# =============================================================================
+
+def find_best_normal_importance(
+        test_dataset,
+        embedding_list,
+        best_model,
+        device,
+        args,
+        node_number,
+        test_func,
+        reg_1_list=[0.01, 0.1, 1, 5]
+    ):
+    best_alpha_drop = -float('inf')
+    best_reg_1 = None
+    best_alpha_importance = None
+    best_sparsity = None 
+    max_value = len(reg_1_list)
+    for n, reg_1 in enumerate(reg_1_list):
+        args.reg_1 = reg_1
+
+        alpha_importance = compute_normal_importance_parallel(
+            embedding_list = embedding_list,
+            test_dataset=test_dataset,
+            device=device,
+            args=args
+        )
+        # Compute sparsity statistics
+        sparsity_list = []
+        for alpha in alpha_importance:
+            if alpha is not None:
+                sparsity = (alpha.abs() < 1e-4).float().mean().item()
+                sparsity_list.append(sparsity)
+
+        if sparsity_list:
+            avg_sparsity = sum(sparsity_list) / len(sparsity_list)
+            print(f"[reg_1={reg_1}] Average sparsity: {avg_sparsity:.4f}")
+        else:
+            print(f"[reg_1={reg_1}] No valid alpha_importance to compute sparsity.")
+        print(f'[reg_1={reg_1}] Alpha importance computed.')
+
+        alpha_base, alpha_avg, alpha_drop = test_func(  
+            model=best_model,
+            dataset=test_dataset,
+            device=device,
+            number_list=node_number,
+            importance_list=alpha_importance,
+            args=args
+        )
+        if avg_sparsity > 1e-5:
+            if alpha_drop > best_alpha_drop:
+
+                best_alpha_drop = alpha_drop
+                best_reg_1 = reg_1
+                best_alpha_base = alpha_base 
+                best_alpha_avg = alpha_avg 
+                best_alpha_importance = alpha_importance.copy()
+                best_sparsity = avg_sparsity
+            print(f'Drop: {alpha_drop:.4f} (reg_1: {reg_1})')
+
+        else:
+            if n == max_value - 1:
+                best_alpha_drop = alpha_drop
+                best_reg_1 = reg_1
+                best_alpha_base = alpha_base 
+                best_alpha_avg = alpha_avg 
+                best_alpha_drop = alpha_drop
+                best_alpha_importance = alpha_importance.copy()
+                best_sparsity = avg_sparsity
+            print(f'Drop: {alpha_drop:.4f} (reg_1: {reg_1})')
+    args.reg_1 = best_reg_1
+
+    print(f'[Best Reg_1] {best_reg_1} (Drop: {best_alpha_drop:.4f})')
+    return best_alpha_importance, best_reg_1, best_alpha_base, best_alpha_avg, best_alpha_drop,best_sparsity
+
+
 
 # =============================================================================
 # 1. 그냥 alpha 구하기 (노드 단위)
@@ -60,7 +195,7 @@ def optimize_one_graph(data, test_data, device, args):
     for _ in range(300):
         optimizer.zero_grad()
         weighted_sum = torch.sum(alpha.unsqueeze(1) * embedding, dim=0)
-        loss = torch.norm(weighted_sum - uniform, p=2) ** 2 + lambda_reg * torch.norm(alpha, p=1)
+        loss = torch.norm(weighted_sum - uniform, p=2) ** 2 / embedding.size(1) + lambda_reg * torch.norm(alpha, p=1)
         loss.backward()
         optimizer.step()
 
@@ -125,6 +260,8 @@ def find_best_alpha_importance(
             importance_list=alpha_importance,
             args=args
         )
+        wandb.log({"l1_drop_log": alpha_drop, "reg_1": reg_1})
+        
 
         if alpha_drop > best_alpha_drop:
             best_alpha_drop = alpha_drop
@@ -177,11 +314,11 @@ def optimize_one_group_graph(data, test, device, args):
     group_alpha = torch.nn.Parameter(torch.ones(n, device=device))
     optimizer = torch.optim.Adam([group_alpha], lr=0.01)
     lambda_reg = args.reg_2
-
+    
     for epoch in range(300):
         optimizer.zero_grad()
         weighted_sum = torch.sum(group_alpha.unsqueeze(1) * embedding, dim=0)
-        loss = torch.norm(weighted_sum - uniform, p=2) ** 2
+        loss = torch.norm(weighted_sum - uniform, p=2) ** 2  / embedding.size(1)
         loss += lambda_reg * group_lasso_regularization(group_alpha, group_tensor_list)
         loss.backward()
         optimizer.step()
@@ -254,6 +391,9 @@ def find_best_group_alpha_importance(
             number_list=node_number,
             importance_list=node_level_equalized_importance, args=args
         )
+
+
+        wandb.log({"group_drop_log": diff, "reg_2": reg_2})
 
         if diff > best_group_alpha_drop:
             best_group_alpha_drop = diff
@@ -356,21 +496,24 @@ def equalize_group_alpha(group_alpha_importance, test_dataset):
 # =============================================================================
 # 5. Grad-CAM을 통한 노드 중요도 (노이즈 추가)
 # =============================================================================
-def compute_gradcam_importance(test_dataset, best_model, atom_encoder,  device):
+def compute_gradcam_importance(test_dataset, best_model,   device, atom_encoder = None):
     gradcam_importance = []
     for i in range(len(test_dataset)):
         if test_dataset[i].y.isnan().any():
             print(f"Skipping data index {i} due to NaN in target.")
             continue
-
-        grad_node_importance = gradcam.grad_cam(best_model, test_dataset[i], atom_encoder, device)
+        if atom_encoder is not None:
+            grad_node_importance = gradcam.grad_cam(best_model, test_dataset[i], device, atom_encoder=atom_encoder)
+        else: 
+            grad_node_importance = gradcam.grad_cam(best_model, test_dataset[i], device)
+        
         gradcam_importance.append(grad_node_importance.detach().to('cpu'))
     return gradcam_importance
 
 # =============================================================================
 # 6. GNNExplainer를 활용한 노드 중요도
 # =============================================================================
-def compute_gnnexplainer_importance(test_dataset, model, atom_encoder, device):
+def compute_gnnexplainer_importance(test_dataset, model,  device,atom_encoder = None):
     explainer = Explainer(
         model=model,
         algorithm=GNNExplainer(epochs=50, lr=0.001),
@@ -390,7 +533,11 @@ def compute_gnnexplainer_importance(test_dataset, model, atom_encoder, device):
         if data.y.isnan():
             continue
         with torch.no_grad():
-            x = atom_encoder(data.x)
+            if atom_encoder is not None:
+                x = atom_encoder(data.x)
+            else:
+                x = data.x
+
             model(x, data.edge_index, batch=data.batch)
         explanation = explainer(x, data.edge_index, batch=data.batch)
         node_importance.append(explanation.node_mask.view(-1).detach().cpu())
@@ -412,7 +559,7 @@ def compute_node_number(node_level_equalized_importance, top_k=2):
 # ==============================================================================
 
 # ✅ 1. Explainer 객체 정의
-def compute_pgexplainer_importance(test_dataset, model, atom_encoder):
+def compute_pgexplainer_importance(test_dataset, model, atom_encoder=None):
     explainer = Explainer(
         model=model,
         algorithm=PGExplainer(epochs=100, lr=0.003),
@@ -425,16 +572,21 @@ def compute_pgexplainer_importance(test_dataset, model, atom_encoder):
         edge_mask_type='object'
     )
 
-    loader = DataLoader(test_dataset, batch_size=32, shuffle=True)
+    loader = DataLoader(test_dataset, batch_size=32, shuffle=True) #, atom_encoder=None)
 
     # PGExplainer 학습
     model.to('cpu').eval()
-    atom_encoder.to('cpu').eval()
+    if atom_encoder is not None:\
+        atom_encoder.to('cpu').eval()
 
     for epoch in range(100):
         for data in loader:
             data = data.to('cpu')
-            loss = explainer.algorithm.train(epoch, model, atom_encoder(data.x), data.edge_index,
+            if atom_encoder is not None:
+                x = atom_encoder(data.x)
+            else:
+                x = data.x
+            loss = explainer.algorithm.train(epoch, model, x, data.edge_index,
                                                 target=data.y, batch=data.batch)
 
     def edge_mask_to_node_importance(edge_index, edge_mask, num_nodes):
@@ -451,7 +603,10 @@ def compute_pgexplainer_importance(test_dataset, model, atom_encoder):
     for data in tqdm(test_dataset, desc='Generating Explanations'):
         data = data.to('cpu')
         with torch.no_grad():
-            x = atom_encoder(data.x)
+            if atom_encoder is not None:
+                x = atom_encoder(data.x)
+            else:
+                x = data.x
             explanation = explainer.algorithm.forward(
                 model=model,
                 x=x,
@@ -476,7 +631,7 @@ def compute_pgexplainer_importance(test_dataset, model, atom_encoder):
 # ==========================================================================
 
 
-def compute_graphmask_importance(test_dataset, model, atom_encoder):
+def compute_graphmask_importance(test_dataset, model, atom_encoder=None):
     # 🟨 여기서 GINConv에 in_channels 넣어주기
     for module in model.modules():
         if isinstance(module, GINConv):
@@ -499,7 +654,8 @@ def compute_graphmask_importance(test_dataset, model, atom_encoder):
     )
 
     model.to('cpu').eval()
-    atom_encoder.to('cpu').eval()
+    if atom_encoder is not None:
+        atom_encoder.to('cpu').eval()
 
     node_importance = []
     for data in tqdm(test_dataset, desc='GraphMask Explanation'):
@@ -507,7 +663,10 @@ def compute_graphmask_importance(test_dataset, model, atom_encoder):
         if data.y.isnan():
             continue
         with torch.no_grad():
-            x = atom_encoder(data.x)
+            if atom_encoder is not None:
+                x = atom_encoder(data.x)
+            else:
+                x = data.x
             model(x, data.edge_index, batch=data.batch)
 
         explanation = explainer(x, data.edge_index, batch=data.batch)
@@ -519,7 +678,7 @@ def compute_graphmask_importance(test_dataset, model, atom_encoder):
 # 10. CaptumExplainer를 활용한 노드 중요도
 # =============================================================================
 
-def compute_captum_importance(test_dataset, model, atom_encoder, model_name):
+def compute_captum_importance(test_dataset, model,  model_name, atom_encoder=None):
     explainer = Explainer(
         model=model,
         algorithm=CaptumExplainer(model_name),  # or IntegratedGradients
@@ -533,7 +692,8 @@ def compute_captum_importance(test_dataset, model, atom_encoder, model_name):
     )
 
     model.to('cpu').eval()
-    atom_encoder.to('cpu').eval()
+    if atom_encoder is not None:
+        atom_encoder.to('cpu').eval()
 
     node_importance = []
     for data in tqdm(test_dataset, desc='Captum Explanation'):
@@ -541,7 +701,10 @@ def compute_captum_importance(test_dataset, model, atom_encoder, model_name):
         if data.y.isnan():
             continue
         with torch.no_grad():
-            x = atom_encoder(data.x)
+            if atom_encoder is not None:
+                x = atom_encoder(data.x)
+            else:
+                x = data.x
             data.x = x
 
         explanation = explainer(data.x, data.edge_index, batch=data.batch)
@@ -963,7 +1126,7 @@ class SubgraphX:
 
         return explanation.node_set, mcts
     
-def compute_subgraphx_importance(test_dataset, model, atom_encoder, node_number, device_parm):
+def compute_subgraphx_importance(test_dataset, model,  node_number, device_parm, atom_encoder=None):
 
 
     global device
@@ -974,16 +1137,17 @@ def compute_subgraphx_importance(test_dataset, model, atom_encoder, node_number,
         "model": model.to('cpu'),
         "num_layers": 3,
         "exp_weight": 5,
-        "m": 3,
-        "t": 3,
+        "m": 2,
+        "t": 2,
         "task": Task.GRAPH_CLASSIFICATION,
-        "max_children": 8,
+        "max_children": 4,
         "experiment": None,
         "value_func": mc_l_shapley,
     }
     subgraphx = SubgraphX(**sx_params)
     model.to(device).eval()
-    atom_encoder.to('cpu').eval()
+    if atom_encoder is not None:
+        atom_encoder.to('cpu').eval()
 
     node_importance = []
     for n, data in enumerate(test_dataset):
@@ -991,8 +1155,13 @@ def compute_subgraphx_importance(test_dataset, model, atom_encoder, node_number,
         if data.y.isnan():
             continue
         with torch.no_grad():
-            x = atom_encoder(data.x)
-            data.x = x
+            if atom_encoder is not None:
+                x = atom_encoder(data.x)
+            else:
+                x = data.x
+
+            # ✅ float 형으로 변환
+            data.x = x.float()
 
 
         explaining_subgraph, mcts = subgraphx(data, n_min=node_number[n] , nodes_to_keep=None, exhaustive=False)

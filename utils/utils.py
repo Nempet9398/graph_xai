@@ -10,7 +10,7 @@ import torch.nn.functional as F
 import torch_geometric
 from torch_geometric.utils.convert import to_networkx
 from sklearn.model_selection import StratifiedKFold
-
+import pickle
 
 from torch_geometric.utils import to_networkx
 import networkx as nx
@@ -55,6 +55,22 @@ class GeneralizedCELoss(torch.nn.Module):
 
         loss = F.binary_cross_entropy_with_logits(logits, targets, reduction='none') * loss_weight
         return loss
+
+
+# Helper function to save/load importance
+def load_or_compute_importance(file_name, compute_func, importance_save_path,test=False):
+    file_path = os.path.join(importance_save_path, file_name)
+    if os.path.exists(file_path) and not test:
+        print(f"Loading {file_name} from {file_path}")
+        with open(file_path, 'rb') as f:
+            importance = pickle.load(f)
+    else:
+        importance = compute_func()
+        with open(file_path, 'wb') as f:
+            pickle.dump(importance, f)
+        print(f"Saved {file_name} to {file_path}")
+    return importance
+
 
 def creat_one_pyg_graph(context, shape, label, feature_dim, shape_num, settings_dict, args=None):
     if args is None:
@@ -109,37 +125,7 @@ def graph_dataset_generate(args, save_path):
     print("save at:{}".format(save_path))
     return dataset
 
-# def test_dataset_generate(args, save_path):
 
-#     class_list = ["house", "cycle", "grid", "diamond"]
-#     settings_dict = {"ba": {"width_basis": (args.node_num) ** 2, "m": 2},
-#                      "tree": {"width_basis":2, "m": args.node_num}}
-
-#     feature_dim = args.feature_dim
-#     shape_num = args.shape_num
-#     class_num = class_list.__len__()
-#     dataset = {}
-#     dataset['tree'] = {}
-#     dataset['ba'] = {}
-#     data_num = int(0.2 * args.data_num)
-#     for label, shape in enumerate(class_list):
-#         tr_list = []
-#         ba_list = []
-#         print("test set create shape:{}".format(shape))
-#         for i in tqdm(range(data_num)):
-#             tr_g, label1 = creat_one_pyg_graph(context="tree", shape=shape, label=label, feature_dim=feature_dim, 
-#                                                shape_num=shape_num, settings_dict=settings_dict, args=args)
-#             ba_g, label2 = creat_one_pyg_graph(context="ba", shape=shape, label=label, feature_dim=feature_dim, 
-#                                                shape_num=shape_num, settings_dict=settings_dict, args=args)
-#             tr_list.append(tr_g)
-#             ba_list.append(ba_g)
-#         dataset['tree'][shape] = tr_list
-#         dataset['ba'][shape] = ba_list
-
-#     save_path += "/syn_dataset_test.pt"
-#     torch.save(dataset, save_path)
-#     print("save at:{}".format(save_path))
-#     return dataset
 
 def dataset_bias_split(dataset, class_list, bias=None, split=None, total=20000):
     
