@@ -27,12 +27,16 @@ def main(args):
         atom_encoder_path = os.path.join("model", "v3", "group", args.dataset, args.pooling, "atom_encoder", f"atom_encoder_{seed}.pt")
         imp_path = os.path.join("importance", "v3", args.dataset, args.model, args.pooling, f"model_{seed}_alpha_importance.pkl")
         #%%
+        model_path
+        #%%
         if not os.path.exists(model_path) or not os.path.exists(atom_encoder_path) or not os.path.exists(imp_path):
             continue
-
+        #%%
         model = torch.load(model_path, map_location=args.device).to(args.device).eval()
         atom_encoder = torch.load(atom_encoder_path, map_location=args.device).to(args.device).eval()
+        #%%
 
+        #%%
         # Dataset selection logic
         if args.dataset.lower() == 'alkane':
             dataset, split_idx = dataset_module.get_alkane()
