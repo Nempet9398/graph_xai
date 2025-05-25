@@ -72,6 +72,41 @@ def load_or_compute_importance(file_name, compute_func, importance_save_path,tes
     return importance
 
 
+from sklearn.metrics import roc_auc_score
+import numpy as np
+from sklearn.metrics import average_precision_score
+
+def compute_auc_list(importance_list, dataset):
+    auc_list = []
+    for imp, data in zip(importance_list, dataset):
+        if hasattr(data, 'ground_truth'):
+            y_true = data.ground_truth.detach().cpu().numpy()
+            y_score = imp.detach().cpu().numpy()
+            # Min-max normalization
+            if y_score.max() > y_score.min():
+                y_score = (y_score - y_score.min()) / (y_score.max() - y_score.min())
+            if (y_true.sum() == 0) or (y_true.sum() == len(y_true)):
+                auc_list.append(float('nan'))
+            else:
+                auc_list.append(roc_auc_score(y_true, y_score))
+    return auc_list
+
+def compute_pr_auc_list(importance_list, dataset):
+    pr_auc_list = []
+    for imp, data in zip(importance_list, dataset):
+        if hasattr(data, 'ground_truth'):
+            y_true = data.ground_truth.detach().cpu().numpy()
+            y_score = imp.detach().cpu().numpy()
+            # Min-max normalization
+            if y_score.max() > y_score.min():
+                y_score = (y_score - y_score.min()) / (y_score.max() - y_score.min())
+            if (y_true.sum() == 0) or (y_true.sum() == len(y_true)):
+                pr_auc_list.append(float('nan'))
+            else:
+                pr_auc_list.append(average_precision_score(y_true, y_score))
+    return pr_auc_list
+
+
 def creat_one_pyg_graph(context, shape, label, feature_dim, shape_num, settings_dict, args=None):
     if args is None:
         noise = 0

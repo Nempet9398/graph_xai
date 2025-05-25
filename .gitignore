@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 
+
 # Logs and outputs
 *.log
 *.csv
@@ -9,8 +10,16 @@ results/
 wandb/
 *.pt
 *.pkl
-# Model checkpoints
+*.png
+
+# path
 model/
+visualization/
+importance/
+fig_folder/
+etc/
+
+
 # Shell scripts (optional)
 *.sh
 # Raw or generated data
@@ -21,3 +30,4 @@ dataset/
 
 # Optional visualization/test datasets
 GraphXAI/
+

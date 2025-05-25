@@ -1,39 +1,40 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-import wandb
-import torch
-import torch.optim as optim
-from torch_geometric.explain import Explainer
-from torch_geometric.explain.algorithm import GNNExplainer
-from torch_geometric.explain.config import ModelConfig, ExplanationType, MaskType
-from tqdm import tqdm
-import pandas as pd
-import math
-from torch_geometric.nn import GINConv
 
 import os
+import math
+import torch
+import logging
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+from tqdm import tqdm
+from enum import Enum
+from typing import List, Set, Union, Tuple, Dict, Callable
+from collections import defaultdict
+from joblib import Parallel, delayed
 from skglm import GroupLasso
+
+import torch.nn.functional as F
+from torch.nn import ReLU, Softmax, Parameter
+from torch_geometric.data import Data
+from torch_geometric.loader import DataLoader
+from torch_geometric.nn import GCNConv, GINConv, Sequential
+from torch_geometric.utils import to_networkx, k_hop_subgraph
+from torch_geometric.explain import Explainer, CaptumExplainer
+from torch_geometric.explain.algorithm import GNNExplainer, PGExplainer, GraphMaskExplainer
+from torch_geometric.explain.config import ModelConfig, ExplanationType, MaskType
 
 import importlib
 gradcam = importlib.import_module('xai_test.gradcam')
 importlib.reload(gradcam)
 
-from joblib import Parallel, delayed
-from tqdm import tqdm
-import torch
-import logging
-from torch_geometric.loader import DataLoader
-from torch_geometric.explain import Explainer, CaptumExplainer
-from torch_geometric.explain.algorithm import PGExplainer,GraphMaskExplainer
-from torch_geometric.explain.config import ModelConfig, ExplanationType, MaskType
-import torch.nn.functional as F
+# Logging setup
+logging.basicConfig(level=logging.INFO)
 
-# =============================================================================
-# 0. 그냥 alpha 구하기 (원자 X)
-# =============================================================================
-
-import torch.nn.functional as F
-from torch.nn import Parameter
+# Constants
+sns.set(style="whitegrid")
 
 def optimize_normal_graph(data, test_data, device, args):
     if test_data.y.isnan().any():
@@ -85,9 +86,6 @@ def compute_normal_importance_parallel(embedding_list,  test_dataset, device, ar
 
     return [r for r in results if r is not None]
 
-# =============================================================================
-# 0.2 alpha 구하기 함수화
-# =============================================================================
 
 def find_best_normal_importance(
         test_dataset,
@@ -162,14 +160,6 @@ def find_best_normal_importance(
     return best_alpha_importance, best_reg_1, best_alpha_base, best_alpha_avg, best_alpha_drop,best_sparsity
 
 
-
-# =============================================================================
-# 1. 그냥 alpha 구하기 (노드 단위)
-# =============================================================================
-
-import torch.nn.functional as F
-from torch.nn import Parameter
-
 def optimize_one_graph(data, test_data, device, args):
     if test_data.y.isnan().any():
         return None
@@ -238,7 +228,7 @@ def find_best_alpha_importance(
     best_alpha_drop = -float('inf')
     best_reg_1 = None
     best_alpha_importance = None
-
+    best_node_number = None
     for reg_1 in reg_1_list:
         args.reg_1 = reg_1
 
@@ -251,17 +241,19 @@ def find_best_alpha_importance(
         )
         print(f'[reg_1={reg_1}] Alpha importance computed.')
 
+        node_level_equalized_importance = equalize_group_alpha(alpha_importance, test_dataset)
+        node_number = select_motifs_by_node_ratio(node_level_equalized_importance,test_dataset, sparsity_target=0.3)
+
         alpha_base, alpha_avg, alpha_drop = test_func(  
             model=best_model,
             atom_encoder=atom_encoder,
             dataset=test_dataset,
             device=device,
             number_list=node_number,
-            importance_list=alpha_importance,
+            importance_list=node_level_equalized_importance,
             args=args
         )
-        wandb.log({"l1_drop_log": alpha_drop, "reg_1": reg_1})
-        
+        # wandb.log({"l1_drop_log": alpha_drop, "reg_1": reg_1})
 
         if alpha_drop > best_alpha_drop:
             best_alpha_drop = alpha_drop
@@ -269,18 +261,122 @@ def find_best_alpha_importance(
             best_alpha_base = alpha_base
             best_alpha_avg = alpha_avg 
             best_alpha_drop = alpha_drop
-            best_alpha_importance = alpha_importance.copy()
+            best_node_number = node_number.copy()
+            best_alpha_importance = node_level_equalized_importance.copy()
         print(f'Drop: {alpha_drop:.4f} (reg_1: {reg_1})')
 
     args.reg_1 = best_reg_1
 
     print(f'[Best Reg_1] {best_reg_1} (Drop: {best_alpha_drop:.4f})')
-    return best_alpha_importance, best_reg_1, best_alpha_base, best_alpha_avg, best_alpha_drop
+    return best_alpha_importance, best_reg_1, best_alpha_base, best_alpha_avg, best_alpha_drop, best_node_number
 
 
-# =============================================================================
-# 2. 그룹 alpha 구하기 (노드 단위에서 Group Lasso)
-# =============================================================================
+def optimize_one_graph_connectivity(data, test_data, device, args):
+    if test_data.y.isnan().any():
+        return None
+
+    data = data.to(device)
+    embedding = data
+
+    n = embedding.shape[0]
+
+    if args.pooling == 'mean':
+        uniform = torch.mean(embedding, dim=0)
+    elif args.pooling == 'max':
+        uniform = torch.max(embedding, dim=0).values
+    elif args.pooling == 'sum':
+        uniform = torch.sum(embedding, dim=0)
+    else:
+        raise ValueError(f"Unsupported pooling method: {args.pooling}")
+
+    alpha = Parameter(torch.ones(n, device=device))
+    optimizer = torch.optim.Adam([alpha], lr=0.01)
+    lambda_reg = args.reg_1
+    lambda_conn = args.reg_conn
+
+    edge_index = test_data.edge_index.to(device)
+
+    for _ in range(300):
+        optimizer.zero_grad()
+        weighted_sum = torch.sum(alpha.unsqueeze(1) * embedding, dim=0)
+        recon_loss = torch.norm(weighted_sum - uniform, p=2) ** 2 / embedding.size(1)
+        l1_loss = lambda_reg * torch.norm(alpha, p=1)
+        conn_loss = torch.sum((alpha[edge_index[0]] - alpha[edge_index[1]]) ** 2) / edge_index.shape[1]
+        loss = recon_loss + l1_loss + lambda_conn * conn_loss
+        loss.backward()
+        optimizer.step()
+
+    return alpha.detach().cpu()
+
+def compute_alpha_connectivity_parallel(embedding_list, test_dataset, device, args, n_jobs=20):
+    results = [None] * len(test_dataset)
+
+    def worker(i):
+        embedding_data = embedding_list[i].to(device)
+        test_data = test_dataset[i]
+        return i, optimize_one_graph_connectivity(embedding_data, test_data, device, args)
+
+    with ThreadPoolExecutor(max_workers=n_jobs) as executor:
+        futures = [executor.submit(worker, i) for i in range(len(test_dataset))]
+        for f in tqdm(as_completed(futures), total=len(futures), desc="GPU 병렬 연결 제약 최적화 중"):
+            i, res = f.result()
+            results[i] = res
+
+    return [r for r in results if r is not None]
+
+def find_best_alpha_connectivity(
+    test_dataset,
+    best_model,
+    atom_encoder,
+    embedding_list,
+    device,
+    args,
+    test_func,
+    node_number,
+    reg_1_list=[0.01, 0.1, 1, 5]
+):
+    best_alpha_drop = -float('inf')
+    best_reg_1 = None
+    best_reg_conn = None
+    best_alpha_importance = None
+
+    for reg_1 in reg_1_list:
+        args.reg_1 = reg_1
+        for lambda_conn in [0.1, 1.0, 5.0]:  # ✅ 연결 정규화 계수도 튜닝
+            args.reg_conn = lambda_conn
+
+            alpha_importance = compute_alpha_connectivity_parallel(
+                embedding_list = embedding_list,
+                test_dataset = test_dataset,
+                device = device,
+                args = args
+            )
+            print(f'[reg_1={reg_1}] Connectivity alpha importance computed.')
+
+            alpha_base, alpha_avg, alpha_drop = test_func(
+                model = best_model,
+                atom_encoder = atom_encoder,
+                dataset = test_dataset,
+                device = device,
+                number_list = node_number,
+                importance_list = alpha_importance,
+                args = args
+            )
+
+            if alpha_drop > best_alpha_drop:
+                best_alpha_drop = alpha_drop
+                best_reg_1 = reg_1
+                best_reg_conn = lambda_conn
+                best_alpha_base = alpha_base
+                best_alpha_avg = alpha_avg 
+                best_alpha_importance = alpha_importance.copy()
+            print(f'Drop: {alpha_drop:.4f} (reg_1: {reg_1}, reg_conn: {lambda_conn})')
+
+    args.reg_1 = best_reg_1
+    print(f'[Best Reg_1 - Connectivity] {best_reg_1} (reg_conn: {best_reg_conn}, Drop: {best_alpha_drop:.4f})')
+    return best_alpha_importance, best_reg_1, best_reg_conn, best_alpha_base, best_alpha_avg, best_alpha_drop
+
+
 
 def to_group_tensor_list(group_list, device):
     return [torch.tensor(grp, device=device) for grp in group_list if len(grp) > 0]
@@ -356,7 +452,7 @@ def find_best_group_alpha_importance(
     test_func,
     reg_2_list=[100, 150, 200, 250]
 ):
-    warnings.filterwarnings("ignore")  # ✅ 불필요한 경고 무시
+    warnings.filterwarnings("ignore") 
 
     best_group_alpha_drop = -float('inf')
     best_reg_2 = None
@@ -375,13 +471,14 @@ def find_best_group_alpha_importance(
         print(f'[reg_2={reg_2}] Group alpha importance computed.')
         node_level_equalized_importance = equalize_group_alpha(group_alpha_importance, test_dataset)
 
-        top_k = args.top_motif
-        node_number = []
-        for importance in node_level_equalized_importance:
-            unique_vals = torch.unique(importance)
-            top_k_vals = torch.topk(unique_vals, top_k).values
-            number = torch.sum(torch.isin(importance, top_k_vals))
-            node_number.append(number)
+        node_number = select_motifs_by_node_ratio(node_level_equalized_importance,test_dataset, sparsity_target=0.3)
+        # top_k = args.top_motif
+        # node_number = []
+        # for importance in node_level_equalized_importance:
+        #     unique_vals = torch.unique(importance)
+        #     top_k_vals = torch.topk(unique_vals, top_k).values
+        #     number = torch.sum(torch.isin(importance, top_k_vals))
+        #     node_number.append(number)
 
         base,average , diff = test_func(
             model=best_model,
@@ -393,7 +490,7 @@ def find_best_group_alpha_importance(
         )
 
 
-        wandb.log({"group_drop_log": diff, "reg_2": reg_2})
+
 
         if diff > best_group_alpha_drop:
             best_group_alpha_drop = diff
@@ -411,9 +508,6 @@ def find_best_group_alpha_importance(
 
 
 
-# =============================================================================
-# 3. 그룹 alpha를 평균내서 노드 수준 중요도로 통일하기
-# =============================================================================
 def equalize_group_alpha(group_alpha_importance, test_dataset):
     node_level_equalized_importance = []
     for data_index in range(len(test_dataset)):
@@ -423,79 +517,41 @@ def equalize_group_alpha(group_alpha_importance, test_dataset):
 
         group_level = group_alpha_importance[data_index]
         group = test_dataset[data_index].clique  # List[List[int]]
-        n = test_dataset[data_index].x.shape[0]  # 전체 노드 개수
+        n = test_dataset[data_index].x.shape[0]  
 
         node_alpha_equalized = torch.zeros(n)
         for node_indices in group:
             if len(node_indices) > 0:
-            # 같은 그룹에 속한 노드들은 평균 값으로 통일
+
                 mean_value = group_level[torch.tensor(node_indices)].mean()
                 node_alpha_equalized[torch.tensor(node_indices)] = mean_value
 
         node_level_equalized_importance.append(node_alpha_equalized)
     return node_level_equalized_importance
 
-# =============================================================================
-# 4. 그룹 개수만큼 alpha 구하기 (모티프 단위)
-# =============================================================================
-# def compute_group_importance(test_dataset, atom_encoder, best_model, device, args):
-#     group_importance = []
+def select_motifs_by_node_ratio(node_level_equalized_importance, test_dataset, sparsity_target=0.3):
     
-#     for data_index in range(len(test_dataset)):
-#         if test_dataset[data_index].y.isnan().any():
-#             continue
+    node_number = []
+    for data_index in range(len(test_dataset)):
+        importance = node_level_equalized_importance[data_index]
+        group = test_dataset[data_index].clique  # List[List[int]]
+        total_nodes = len(importance)
+        node_limit = int(total_nodes * sparsity_target)
 
-#         encoded_atoms = atom_encoder(test_dataset[data_index].x.to(device))
-#         x = encoded_atoms
-#         for conv in best_model.convs:
-#             x = conv(x, test_dataset[data_index].edge_index.to(device))
+        motif_scores = [importance[torch.tensor(m)].mean().item() for m in group]
+        sorted_indices = sorted(range(len(group)), key=lambda i: -motif_scores[i])
 
-#         embedding = x.detach().to(device)  # shape: (n_nodes, emb_dim)
-#         uniform = torch.max(embedding, dim=0).values.to(device)
-#         group = test_dataset[data_index].clique  # motif group list: List[List[int]]
-#         n = embedding.shape[0]
-#         G = len(group)  # 그룹 수
 
-#         # 그룹 단위 파라미터 (크기 G, 각 그룹에 하나씩)
-#         raw_group_alpha = torch.nn.Parameter(torch.ones(G, device=device))
-#         optimizer = torch.optim.Adam([raw_group_alpha], lr=0.1)
-#         lambda_reg = args.reg_2
+        selected_nodes = set()
+        for idx in sorted_indices:
+            selected_nodes.update(group[idx])
+            if len(selected_nodes) >= node_limit:
+                break
+        node_number.append(len(selected_nodes))
 
-#         best_loss = float('inf')
-#         patience = 200
-#         patience_counter = 0
+    return node_number
 
-#         def get_positive_group_alpha():
-#             return torch.nn.functional.softplus(raw_group_alpha)
 
-#         for epoch in range(300):
-#             optimizer.zero_grad()
-#             group_alpha = get_positive_group_alpha()  # (G,)
-#             node_alpha = torch.zeros(n, device=device)
-#             for g_idx, node_indices in enumerate(group):
-#                 node_alpha[torch.tensor(node_indices, device=device)] = group_alpha[g_idx]
-#             weighted_sum = torch.sum(node_alpha.unsqueeze(1) * embedding, dim=0)
-#             loss = torch.norm(weighted_sum - uniform, p=2) ** 2 + lambda_reg * torch.norm(group_alpha, p=1)
-
-#             if loss.item() < best_loss:
-#                 best_loss = loss.item()
-#                 patience_counter = 0
-#             else:
-#                 patience_counter += 1
-
-#             if patience_counter >= patience:
-#                 print(f"Stopping early at epoch {epoch} with best loss {best_loss:.4f}")
-#                 break
-
-#             loss.backward()
-#             optimizer.step()
-
-#         group_importance.append(get_positive_group_alpha().detach().cpu())
-#     return group_importance
-
-# =============================================================================
-# 5. Grad-CAM을 통한 노드 중요도 (노이즈 추가)
-# =============================================================================
 def compute_gradcam_importance(test_dataset, best_model,   device, atom_encoder = None):
     gradcam_importance = []
     for i in range(len(test_dataset)):
@@ -510,13 +566,11 @@ def compute_gradcam_importance(test_dataset, best_model,   device, atom_encoder 
         gradcam_importance.append(grad_node_importance.detach().to('cpu'))
     return gradcam_importance
 
-# =============================================================================
-# 6. GNNExplainer를 활용한 노드 중요도
-# =============================================================================
+
 def compute_gnnexplainer_importance(test_dataset, model,  device,atom_encoder = None):
     explainer = Explainer(
         model=model,
-        algorithm=GNNExplainer(epochs=50, lr=0.001),
+        algorithm=GNNExplainer(lr=0.001),
         explanation_type=ExplanationType.model,
         model_config=ModelConfig(
             mode='multiclass_classification',
@@ -543,9 +597,8 @@ def compute_gnnexplainer_importance(test_dataset, model,  device,atom_encoder = 
         node_importance.append(explanation.node_mask.view(-1).detach().cpu())
     return node_importance
 
-# =============================================================================
-# 7. 노드 중요도를 기반으로 top-k 노드 수 계산
-# =============================================================================
+
+
 def compute_node_number(node_level_equalized_importance, top_k=2):
     node_number = []
     for importance in node_level_equalized_importance:
@@ -554,15 +607,13 @@ def compute_node_number(node_level_equalized_importance, top_k=2):
         number = torch.sum(torch.isin(importance, top_k_values))
         node_number.append(number)
     return node_number
-# ==============================================================================
-# 8. PGExplainer를 활용한 노드 중요도
-# ==============================================================================
 
-# ✅ 1. Explainer 객체 정의
+
+
 def compute_pgexplainer_importance(test_dataset, model, atom_encoder=None):
     explainer = Explainer(
         model=model,
-        algorithm=PGExplainer(epochs=100, lr=0.003),
+        algorithm=PGExplainer( lr=0.003),
         explanation_type='phenomenon',
         model_config=ModelConfig(
             mode='multiclass_classification',
@@ -597,9 +648,9 @@ def compute_pgexplainer_importance(test_dataset, model, atom_encoder=None):
             node_importance[dst] += edge_mask[i]
         return node_importance
 
-    # ✅ 설명 결과 저장 리스트
+
     pg_node_importances = []
-    # ✅ 각 그래프에 대해 설명 생성
+
     for data in tqdm(test_dataset, desc='Generating Explanations'):
         data = data.to('cpu')
         with torch.no_grad():
@@ -624,11 +675,6 @@ def compute_pgexplainer_importance(test_dataset, model, atom_encoder=None):
         pg_node_importances.append(node_importance)
 
     return pg_node_importances
-
-
-# ==========================================================================
-# 9. GraphMaskExplainer를 활용한 노드 중요도
-# ==========================================================================
 
 
 def compute_graphmask_importance(test_dataset, model, atom_encoder=None):
@@ -674,9 +720,6 @@ def compute_graphmask_importance(test_dataset, model, atom_encoder=None):
 
     return node_importance
 
-# =============================================================================
-# 10. CaptumExplainer를 활용한 노드 중요도
-# =============================================================================
 
 def compute_captum_importance(test_dataset, model,  model_name, atom_encoder=None):
     explainer = Explainer(
@@ -712,27 +755,6 @@ def compute_captum_importance(test_dataset, model,  model_name, atom_encoder=Non
 
     return node_importance
 
-
-
-#%%
-
-import torch
-from torch.nn import ReLU, Softmax
-import torch_geometric
-from torch_geometric.data import Data
-from torch_geometric.loader import DataLoader
-from torch_geometric.nn import GCNConv, Sequential
-from torch_geometric.utils import to_networkx, k_hop_subgraph
-import networkx as nx
-import numpy as np
-import math
-import matplotlib.pyplot as plt
-from tqdm import tqdm
-from typing import List, Set, Union, Tuple, Dict, Callable
-from enum import Enum
-from collections import defaultdict
-import seaborn as sns
-import os
 
 
 class Task(Enum):
@@ -1137,10 +1159,10 @@ def compute_subgraphx_importance(test_dataset, model,  node_number, device_parm,
         "model": model.to('cpu'),
         "num_layers": 3,
         "exp_weight": 5,
-        "m": 2,
-        "t": 2,
+        "m": 100,
+        "t": 20,
         "task": Task.GRAPH_CLASSIFICATION,
-        "max_children": 4,
+        "max_children": 10,
         "experiment": None,
         "value_func": mc_l_shapley,
     }
@@ -1160,7 +1182,6 @@ def compute_subgraphx_importance(test_dataset, model,  node_number, device_parm,
             else:
                 x = data.x
 
-            # ✅ float 형으로 변환
             data.x = x.float()
 
 

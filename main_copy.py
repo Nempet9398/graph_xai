@@ -12,6 +12,12 @@ from torch_geometric.loader import DataLoader
 from utils.utils import set_seed
 from torch_geometric.utils import to_networkx
 from torch_geometric.explain import Explainer, GNNExplainer
+
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
 import pandas as pd
 import networkx as nx
 import seaborn as sns
@@ -36,6 +42,8 @@ gradcam = importlib.import_module('xai_test.gradcam')
 importlib.reload(gradcam)
 test_module = importlib.import_module('xai_test.noise_test')
 importlib.reload(test_module)
+#%%
+#python main.py  --epochs 300 --model GCN --dataset MUTAG --top_motif 1 --layers 3 --pooling mean
 
 # ============================ #
 #       Argument Parsing       #
@@ -95,10 +103,35 @@ name = f'{args.dataset}_{args.model}'
 #%%
 def main(args):
 
+    # # Set group_param and lasso_param based on dataset
+    # if args.dataset.lower() == 'alkane':
+    #     args.group_param = [0.1,1,5,  10, 50, 100,  200,300,  300]
+    #     args.lasso_param = [0.0005,0.001,0.005, 0.01, 0.05, 0.1,0.5,1]
+    # elif args.dataset.lower() == 'ames':
+    #     args.group_param = [1,30,50,70,100, 130, 150,170, 200,300]
+    #     args.lasso_param = [0.1,1,5,10,30,50,70,100,150]
+    # elif args.dataset.lower() == 'bace':
+    #     args.group_param = [ 1, 10, 50,100,150, 200, 300, 300,350,400,450,500,550]
+    #     args.lasso_param = [0.1,1,5,10,50,100,150,200,300]
+    # elif args.dataset.lower() == 'bbbp':
+    #     args.group_param = [1,5,10, 30,50, 70, 100, 150, 200,300]
+    #     args.lasso_param = [0.01,0.05, 0.1,0.5, 1,3,5,10]
+    # elif args.dataset.lower() == 'benzene':
+    #     args.group_param = [100, 200,300,300,400,500,600,700]
+    #     args.lasso_param = [1,10,30,50,70,100,150,200,300] 
+    # elif args.dataset.lower() == 'fluoride':
+    #     args.group_param = [0.1,1, 10,  100, 150, 200, 300,300]
+    #     args.lasso_param = [0.1,1,10,15,30,50,70,100]
+    # else:  # default (e.g., MUTAG)
+    #     args.group_param = [0.1,1, 10, 50, 100,150, 200,300,300]
+    #     args.lasso_param = [0.001,0.01, 0.1, 1, 3, 5,10]
+
     for code_seed in range(5):
 
         print(f'Start experiment with seed {code_seed}, Dataset {args.dataset}, Model {args.model}, Pooling {args.pooling}')
-
+        #%%
+        args.model = 'GCN'
+        code_seed = 1
         set_seed(code_seed)
         # ----- Dataset Loading and Preparation -----
         if args.dataset.upper() == 'MUTAG':
@@ -116,15 +149,22 @@ def main(args):
         else:
             dataset, split_idx = dataset_module.get_MolculeNetData(args.dataset)       
 
+        args.num_task = dataset[0].y.view(1, -1).shape[1]
+        args.num_classes = 2
+        # args.group_param = [0.001,0.01,0.05,0.1,0.5,1,5,10,15,30,50]
+        args.lasso_param = [0.001,0.01,0.05,0.1,0.5,1,5,10,15,30,50]
+        #%%
+        args.pooling = 'mean'
         # ----- Model and Atom Encoder Loading or Training -----
-        model_name = 'put_your_model_name_here.pt'
-        atom_encoder_name = 'put_your_atom_encoder_name_here.pt'
-        model_path = os.path.join('put', 'your', 'model', 'path', 'here', model_name)
-        atom_encoder_path = os.path.join('put', 'your', 'atom_encoder', 'path', 'here', atom_encoder_name)
+        model_name = f'model_{code_seed}.pt'
+        atom_encoder_name = f'atom_encoder_{code_seed}.pt'
+        model_path = os.path.join('model','v4', 'group', args.dataset, args.pooling, 'model',args.model, model_name)
+        atom_encoder_path = os.path.join('model','v4', 'group', args.dataset, args.pooling, 'atom_encoder',args.model, atom_encoder_name)
+
         #%%
         # Initialize wandb
         wandb.init(
-            project="PUT YOUR PROJECT NAME HERE",
+            project="GRAPH_XAI_GROUP",
             name=f"{args.dataset}_{args.model}_{args.pooling}_seed_{code_seed}",
             config={
                 "dataset": args.dataset,
@@ -139,10 +179,10 @@ def main(args):
                 "eval_metric": args.eval_metric,
                 "top_motif": args.top_motif,
                 "seed": code_seed,
-            }
+            }, tags=["GROUP_TEST_v4",'only_group']
         )
         #%%
-
+        device = 'cpu'
         #Check if the model and atom encoder exist
         if os.path.exists(model_path) and os.path.exists(atom_encoder_path):
             print(f"Loading existing model and atom encoder from {model_path} and {atom_encoder_path}")
@@ -174,6 +214,9 @@ def main(args):
         test_dataset = dataset[split_idx['test']]
 
         best_model = best_model.to(device)
+        #%%
+
+        #%%
 
 
         # ----- Node Embedding Computation -----
@@ -197,12 +240,10 @@ def main(args):
             test_func=test_module.test_model_with_noise,
             reg_2_list=args.group_param,
         )
-        with open(os.path.join(importance_dir, 'group_alpha_importance.pkl'), 'wb') as f:
-            pickle.dump(group_alpha_importance, f)
-
+        #%%
+        # with open(os.path.join(importance_dir, 'group_alpha_importance.pkl'), 'wb') as f:
+        #     pickle.dump(group_alpha_importance, f)
         best_node_number = [int(0.3* len(i.x)) for i in test_dataset]
-
-
         # # ----- Alpha Importance -----
         alpha_importance, best_reg_1, alpha_base, alpha_avg, alpha_drop, best_alpha_number = optimize.find_best_alpha_importance(
             test_dataset=test_dataset,
@@ -215,6 +256,7 @@ def main(args):
             test_func=test_module.test_model_with_noise,
             reg_1_list=args.lasso_param,
         )
+        #%%
 
         with open(os.path.join(importance_dir, 'alpha_importance.pkl'), 'wb') as f:
             pickle.dump(alpha_importance, f)
@@ -317,3 +359,74 @@ if __name__ == "__main__":
 
 
 
+
+#%%
+
+        # ----- Grad-CAM Visualization -----
+
+        # ----- Extract Activations and Gradients -----
+        def extract_activations_and_gradients(model, data, atom_encoder):
+            x = atom_encoder(data.x.to(device))
+            x.requires_grad_(True)
+            model.eval()
+            activations = []
+            gradients = []
+
+            def forward_hook(module, input, output):
+                activations.append(output.detach().cpu())
+
+            def backward_hook(module, grad_input, grad_output):
+                gradients.append(grad_output[0].detach().cpu())
+
+            handle_fwd = model.convs[-1].register_forward_hook(forward_hook)
+            handle_bwd = model.convs[-1].register_full_backward_hook(backward_hook)
+
+            output = model(x, data.edge_index.to(device))
+            loss = F.cross_entropy(output, data.y.to(device))
+            model.zero_grad()
+            loss.backward()
+
+            handle_fwd.remove()
+            handle_bwd.remove()
+
+            return activations[0], gradients[0]
+
+        from matplotlib import pyplot as plt
+        import seaborn as sns
+
+        # Ensure the directory for saving visualizations exists
+        visualization_dir = 'visualizations'
+        os.makedirs(visualization_dir, exist_ok=True)
+
+        # ----- Activation Visualization -----
+        data = test_dataset[0].to(device)
+        act, grad = extract_activations_and_gradients(best_model, data, atom_encoder)
+        act = act[12:17, :30]  # Limit to specific nodes and features for visualization
+        fig, ax = plt.subplots(figsize=(6, 3))
+        text_name = 'DejaVu Sans'
+        sns.heatmap(act.cpu().numpy(), cmap='coolwarm', ax=ax, cbar=False)
+        ax.set_xlabel('Feature Dim', fontsize=25, fontname=text_name)
+        ax.set_ylabel('Node Index', fontsize=25, fontname=text_name)
+        ax.tick_params(axis='both', which='major', labelsize=20)
+        ax.set_xticks([])  # Remove xticks
+        plt.tight_layout()
+        plt.show()  # Display the activation visualization
+        activation_path = os.path.join(visualization_dir, 'activation_visualization.png')
+        plt.savefig(activation_path)
+        # plt.close()
+        print(f"Activation visualization saved to {activation_path}")
+
+        # ----- Gradient Visualization -----
+        grad = grad[0:5, :30]  # Limit to specific nodes and features for visualization
+        fig, ax = plt.subplots(figsize=(6, 3))
+        sns.heatmap(grad.cpu().numpy(), cmap='Oranges', ax=ax, cbar=False)
+        ax.set_xlabel('Feature Dim', fontsize=25, fontname=text_name)
+        ax.set_ylabel('Node Index', fontsize=25, fontname=text_name)
+        ax.tick_params(axis='both', which='major', labelsize=20)
+        ax.set_xticks([])  # Remove xticks
+        plt.tight_layout()
+        plt.show()  # Display the gradient visualization
+        gradient_path = os.path.join(visualization_dir, 'gradient_visualization.png')
+        plt.savefig(gradient_path)
+        # plt.close()
+        print(f"Gradient visualization saved to {gradient_path}")
