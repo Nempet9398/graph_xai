@@ -8,7 +8,7 @@ from torch_geometric.loader import DataLoader
 from sklearn.metrics import roc_auc_score, f1_score
 import sys
 import os
-# 프로젝트 루트 경로를 path에 추가
+
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from utils.utils import num_graphs
