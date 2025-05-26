@@ -35,17 +35,17 @@ def main(args):
 
     # Initialize wandb
     wandb.init(
-        project="GRAPH_GROUND_TRUTH",
+        project="Put Project Name Here",
         name=f"{args.dataset}_{args.model}_{args.pooling}",
         config={
             "dataset": args.dataset,
             "model": args.model,
             "pooling": args.pooling,
-        }, tags=["GROUND_TRUTH","PR"]
+        }
     )
     all_auc_results = {
         "alpha": [],
-        # "group_alpha": [],
+
         "gradcam": [],
         "gnn_explainer": [],
         "graph_mask": [],
@@ -54,18 +54,18 @@ def main(args):
         "gbp": []
     }
 
-    # 각 시드에 대해 반복
-    for seed in range(5):
+
+    for seed in range(10):
 
         set_seed(seed)
 
-        # 모델과 atom encoder 로드
-        model_path = os.path.join("model", "v4", "group", args.dataset, args.pooling, "model",args.model, f"model_{seed}.pt")
-        atom_encoder_path = os.path.join("model", "v4", "group", args.dataset, args.pooling, "atom_encoder", args.model, f"atom_encoder_{seed}.pt")
+
+        model_path = os.path.join('put','your','path', args.dataset, args.pooling, "model",args.model, f"model_{seed}.pt")
+        atom_encoder_path = os.path.join('put','your','path', args.dataset, args.pooling, "atom_encoder", args.model, f"atom_encoder_{seed}.pt")
         best_model = torch.load(model_path, map_location=args.device).to(args.device).eval()
         atom_encoder = torch.load(atom_encoder_path, map_location=args.device).to(args.device).eval()
 
-        # 데이터셋 로드 - 세가지 종류
+
         if args.dataset.lower() == 'alkane':
             dataset, split_idx = dataset_module.get_alkane()
         elif args.dataset.lower() == 'benzene':
@@ -75,10 +75,9 @@ def main(args):
         else:
             dataset, split_idx = dataset_module.get_MolculeNetData(args.dataset)
 
-        # 테스트 데이터에 대해 진행
+
         test_dataset = dataset[split_idx["test"]]
 
-        # 테스트 데이터 중 ground_truth가 있는 데이터만 필터링
         filtered_idx = [i for i, data in enumerate(test_dataset)
                         if hasattr(data, 'ground_truth')
                         and 0 < data.ground_truth.sum() < data.num_nodes]
@@ -241,66 +240,3 @@ if __name__ == "__main__":
 
     main(args)
 
-#python gt_test.py --dataset fluoride --model GCN --pooling mean --device cuda
-# #%%
-# %matplotlib inline
-# import torch
-# import networkx as nx
-# import matplotlib.pyplot as plt
-# from torch_geometric.utils import to_networkx
-# i = 9
-# # 데이터 예시: PyG Data 객체
-# data = filtered_dataset[i]
-# # importance_ind_alpha = alpha_importance[i]
-# # importance_ind_group = group_alpha_importance[i]
-# # Alpha importance 색상 설정 (연속값)
-# # imp_norm = (importance_ind_alpha - importance_ind_alpha.min()) / (importance_ind_alpha.max() - importance_ind_alpha.min() + 1e-6)
-# # imp_colors = [plt.cm.Reds(val.item()) for val in imp_norm]
-# # Group Alpha importance 색상 설정 (연속값)
-# # imp_norm_group = (importance_ind_group - importance_ind_group.min()) / (importance_ind_group.max() - importance_ind_group.min() + 1e-6)
-# # imp_colors_group = [plt.cm.Blues(val.item()) for val in imp_norm_group]
-# # NetworkX 변환
-# G = to_networkx(data, to_undirected=True)
-
-# # 레이아웃 고정
-# pos = nx.kamada_kawai_layout(G)
-
-# # Ground Truth 색 지정
-# ground_truth = data.ground_truth.bool().tolist()
-# ground_truth_colors = ['red' if gt else 'lightgrey' for gt in ground_truth]
-
-# # Clique 색 지정 (각기 다른 색)
-# cliques = data.clique  # ex: [[1, 2], [4, 5, 6]]
-# clique_colors = [''] * data.num_nodes
-# cmap = plt.get_cmap('tab20')  # 최대 20가지 색
-
-# for idx, clique in enumerate(cliques):
-#     for node in clique:
-#         clique_colors[node] = cmap(idx % 20)
-
-# # 시각화
-# plt.figure(figsize=(20, 4))
-
-# # (1) Clique Subgraphs 시각화
-# plt.subplot(1, 4, 1)
-# nx.draw(G, pos, node_color=clique_colors, with_labels=True, node_size=500)
-# plt.title("Clique Subgraphs")
-
-# # (2) Ground Truth 시각화
-# plt.subplot(1, 4, 2)
-# nx.draw(G, pos, node_color=ground_truth_colors, with_labels=True, node_size=500)
-# plt.title("Ground Truth Explanation")
-
-# # # (3) Alpha Importance Heatmap
-# # plt.subplot(1, 4, 3)
-# # nx.draw(G, pos, node_color=imp_colors, with_labels=True, node_size=500)
-# # plt.title("Alpha Importance")
-
-# # # (4) Group Alpha Importance Heatmap
-# # plt.subplot(1, 4, 4)
-# # nx.draw(G, pos, node_color=imp_colors_group, with_labels=True, node_size=500)
-# # plt.title("Group Alpha Importance")
-
-# plt.tight_layout()
-# plt.show()
-# #%%
