@@ -16,6 +16,8 @@ import pandas as pd
 import networkx as nx
 import seaborn as sns
 import numpy as np
+from sklearn.model_selection import KFold
+import pickle
 
 dataset_module = importlib.import_module('graph_dataset.dataset')
 importlib.reload(dataset_module)
@@ -88,10 +90,10 @@ name = f'{args.dataset}_{args.model}'
 
 def main(args):
 
-
+    code_seed = args.seed if args.seed is not None else 42
     print(f'Start experiment with seed {args.seed}, Dataset {args.dataset}, Model {args.model}, Pooling {args.pooling}')
 
-    set_seed(args.seed)
+    set_seed(code_seed)
 
     if args.dataset.upper() == 'UPFD':
         dataset, split_idx = dataset_module.get_UPFD_GossipCop()
@@ -154,40 +156,80 @@ def main(args):
         print(f"Model saved to {model_path} ")
 
     # ----- Data Preparation -----
-    train_dataset = dataset[split_idx['train']]
-    valid_dataset = dataset[split_idx['valid']]
-    test_dataset = dataset[split_idx['test']]
+    test_dataset = [dataset[i] for i in split_idx['test']]
 
-    best_node_number = [max(2, int(i.x.shape[0] * 0.2)) for i in test_dataset]
-    embedding_list = [
-        best_model(data.x.to(device), data.edge_index.to(device), infer=True).detach() 
-        for data in test_dataset
-    ]
+    kf = KFold(n_splits=5, shuffle=True, random_state=42)
+    dataset_indices = list(range(len(dataset)))
+    fold_results = []
 
+    for fold, (train_idx, valid_idx) in enumerate(kf.split(dataset_indices)):
+        print(f"Starting fold {fold + 1}")
 
+        valid_dataset = [dataset[i] for i in valid_idx]
 
-    # ----- Importance Calculation -----
-    importance_save_path = os.path.join(os.path.dirname(model_path), 'importance')
-    os.makedirs(importance_save_path, exist_ok=True)
-    importance_base = model_name.replace('_model.pt', '')
+        best_model = best_model.to(device)
 
-    # Alpha Importance
-    alpha_result = utils.load_or_compute_importance(
-        f'{importance_base}_alpha_importance.pkl',
-        lambda: optimize.find_best_normal_importance(
-            test_dataset=test_dataset,
+        # ----- Node Embedding Computation -----
+        embedding_list = [
+            best_model(data.x.to(device), data.edge_index.to(device), infer=True).detach()
+            for data in valid_dataset
+        ]
+
+        # Create directory for saving importance values for each fold
+        importance_dir = os.path.join('importance_path', args.dataset, args.model, args.pooling, f"fold_{fold + 1}", str(code_seed))
+        os.makedirs(importance_dir, exist_ok=True)
+
+        # ----- Alpha Importance -----
+        alpha_importance, best_reg_1, alpha_base, alpha_avg, alpha_drop, alpha_sparsity = optimize.find_best_normal_importance(
+            test_dataset=valid_dataset,
             embedding_list=embedding_list,
             best_model=best_model,
             device=device,
             args=args,
-            node_number=best_node_number,
+            node_number=[max(2, int(i.x.shape[0] * 0.2)) for i in valid_dataset],
             test_func=test_module.test_model_with_noise,
             reg_1_list=args.lasso_param,
-        ),
-        importance_save_path
+        )
+
+        # Store results for this fold
+        fold_results.append({
+            "best_reg_1": best_reg_1,
+            "alpha_base": alpha_base,
+            "alpha_avg": alpha_avg,
+            "alpha_drop": alpha_drop,
+            "alpha_sparsity": alpha_sparsity,
+        })
+
+    # Compute average lambda values across folds
+    avg_best_reg_1 = np.mean([result["best_reg_1"] for result in fold_results])
+
+    # ----- Alpha Importance for Test Dataset -----
+    embedding_list = [
+        best_model(data.x.to(device), data.edge_index.to(device), infer=True).detach()
+        for data in test_dataset
+    ]
+
+    alpha_result = optimize.find_best_normal_importance(
+        test_dataset=test_dataset,
+        embedding_list=embedding_list,
+        best_model=best_model,
+        device=device,
+        args=args,
+        node_number=[max(2, int(i.x.shape[0] * 0.2)) for i in test_dataset],
+        test_func=test_module.test_model_with_noise,
+        reg_1_list=[avg_best_reg_1],
     )
-    alpha_importance, best_reg_1, alpha_base, alpha_avg, alpha_drop , alpha_sparsity = alpha_result
-    #%%
+    alpha_importance, best_reg_1, alpha_base, alpha_avg, alpha_drop, alpha_sparsity = alpha_result
+
+    # Save final alpha importance
+    importance_save_path = os.path.join(os.path.dirname(model_path), 'importance')
+    os.makedirs(importance_save_path, exist_ok=True)
+    importance_base = model_name.replace('_model.pt', '')
+
+    with open(os.path.join(importance_save_path, f'{importance_base}_alpha_importance.pkl'), 'wb') as f:
+        pickle.dump(alpha_importance, f)
+
+
     # Grad-CAM
     gradcam_importance = utils.load_or_compute_importance(
         f'{importance_base}_gradcam_importance.pkl',

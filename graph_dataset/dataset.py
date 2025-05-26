@@ -31,10 +31,10 @@ def get_random_split(length, mutag=False):
     split_idx = {}
     if mutag:
         test_ratio = round(length * 0.2)
-        valid_ratio = round(length * 0.1)
+        valid_ratio = 0 #round(length * 0.1)
     else:
         test_ratio = round(length * 0.1)
-        valid_ratio = round(length * 0.1)
+        valid_ratio = 0 #round(length * 0.1)
     train_idx = torch.randperm(length)
     split_idx["test"] = train_idx[:test_ratio]
     split_idx["valid"] = train_idx[test_ratio:test_ratio + valid_ratio]
@@ -170,7 +170,7 @@ def get_fluoride():
 
     data_list, explanation = dataset.get_data_list([i for i in range(len(dataset))])
     datalist = []
-    for idx, data in enumerate(data_list[:2000]):
+    for idx, data in enumerate(data_list):
         ground_truth = data.node_imp.clone()
         mol = get_mol(data.zinc_ids)
         y = data.y.squeeze()
@@ -193,7 +193,7 @@ def get_benzene():
     data_list, explanation = dataset.get_data_list([i for i in range(len(dataset))])
 
     datalist = []
-    for idx, data in enumerate(data_list[:2000]):
+    for idx, data in enumerate(data_list):
         ground_truth = data.node_imp.clone()
         mol = get_mol(data.zinc_ids)
         y = data.y.squeeze()

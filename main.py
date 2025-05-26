@@ -20,6 +20,7 @@ import os
 import pickle
 from torch.autograd import grad
 from matplotlib.colors import Normalize
+from sklearn.model_selection import KFold
 dataset_module = importlib.import_module('graph_dataset.dataset')
 importlib.reload(dataset_module)
 model_module = importlib.import_module('modules.model')
@@ -95,221 +96,269 @@ name = f'{args.dataset}_{args.model}'
 #%%
 def main(args):
 
-    for code_seed in range(5):
+    code_seed = args.seed if args.seed is not None else 42
 
-        print(f'Start experiment with seed {code_seed}, Dataset {args.dataset}, Model {args.model}, Pooling {args.pooling}')
+    print(f'Start experiment with seed {code_seed}, Dataset {args.dataset}, Model {args.model}, Pooling {args.pooling}')
 
-        set_seed(code_seed)
-        # ----- Dataset Loading and Preparation -----
-        if args.dataset.upper() == 'MUTAG':
-            dataset, split_idx = dataset_module.get_MUTAG()
-        elif args.dataset.upper() == 'TOX21V2':
-            dataset, split_idx = dataset_module.get_Tox21Data()    
-        elif args.dataset.lower() == 'alkane':
-            dataset, split_idx = dataset_module.get_alkane()
-        elif args.dataset.lower() == 'benzene':
-            dataset, split_idx = dataset_module.get_benzene()
-        elif args.dataset.lower() == 'ames':
-            dataset, split_idx = dataset_module.get_ames()
-        elif args.dataset.lower() == 'fluoride':
-            dataset, split_idx = dataset_module.get_fluoride()
-        else:
-            dataset, split_idx = dataset_module.get_MolculeNetData(args.dataset)       
+    set_seed(code_seed)
+    # ----- Dataset Loading and Preparation -----
+    if args.dataset.upper() == 'MUTAG':
+        dataset, split_idx = dataset_module.get_MUTAG()
+    elif args.dataset.upper() == 'TOX21V2':
+        dataset, split_idx = dataset_module.get_Tox21Data()    
+    elif args.dataset.lower() == 'alkane':
+        dataset, split_idx = dataset_module.get_alkane()
+    elif args.dataset.lower() == 'benzene':
+        dataset, split_idx = dataset_module.get_benzene()
+    elif args.dataset.lower() == 'ames':
+        dataset, split_idx = dataset_module.get_ames()
+    elif args.dataset.lower() == 'fluoride':
+        dataset, split_idx = dataset_module.get_fluoride()
+    else:
+        dataset, split_idx = dataset_module.get_MolculeNetData(args.dataset)       
 
-        # ----- Model and Atom Encoder Loading or Training -----
-        model_name = 'put_your_model_name_here.pt'
-        atom_encoder_name = 'put_your_atom_encoder_name_here.pt'
-        model_path = os.path.join('put', 'your', 'model', 'path', 'here', model_name)
-        atom_encoder_path = os.path.join('put', 'your', 'atom_encoder', 'path', 'here', atom_encoder_name)
-        #%%
-        # Initialize wandb
-        wandb.init(
-            project="PUT YOUR PROJECT NAME HERE",
-            name=f"{args.dataset}_{args.model}_{args.pooling}_seed_{code_seed}",
-            config={
-                "dataset": args.dataset,
-                "model": args.model,
-                "pooling": args.pooling,
-                "batch_size": args.batch_size,
-                "layers": args.layers,
-                "hidden": args.hidden,
-                "epochs": args.epochs,
-                "lr": args.lr,
-                "weight_decay": args.weight_decay,
-                "eval_metric": args.eval_metric,
-                "top_motif": args.top_motif,
-                "seed": code_seed,
-            }
+    # ----- Model and Atom Encoder Loading or Training -----
+    model_name = 'put_your_model_name_here.pt'
+    atom_encoder_name = 'put_your_atom_encoder_name_here.pt'
+    model_path = os.path.join('put', 'your', 'model', 'path', 'here', model_name)
+    atom_encoder_path = os.path.join('put', 'your', 'atom_encoder', 'path', 'here', atom_encoder_name)
+    #%%
+    # Initialize wandb
+    wandb.init(
+        project="PUT YOUR PROJECT NAME HERE",
+        name=f"{args.dataset}_{args.model}_{args.pooling}_seed_{code_seed}",
+        config={
+            "dataset": args.dataset,
+            "model": args.model,
+            "pooling": args.pooling,
+            "batch_size": args.batch_size,
+            "layers": args.layers,
+            "hidden": args.hidden,
+            "epochs": args.epochs,
+            "lr": args.lr,
+            "weight_decay": args.weight_decay,
+            "eval_metric": args.eval_metric,
+            "top_motif": args.top_motif,
+            "seed": code_seed,
+        }
+    )
+
+    #Check if the model and atom encoder exist
+    if os.path.exists(model_path) and os.path.exists(atom_encoder_path):
+        print(f"Loading existing model and atom encoder from {model_path} and {atom_encoder_path}")
+        atom_encoder = torch.load(atom_encoder_path, map_location=torch.device('cpu')).to(device)
+        best_model = torch.load(model_path, map_location=torch.device('cpu')).to(device)
+
+        best_model.eval()
+        atom_encoder.eval()
+    else:
+
+        print("Model and atom encoder not found. Creating new ones.")
+        atom_encoder = model_module.AtomEncoder(args.hidden).to(device)
+        model = model_module.BasicGNN(args).to(device)
+    
+        # Train the model
+        test_auc, best_model, best_encoder = train_module.train_function(
+            dataset, split_idx, model, atom_encoder, args, device
         )
-        #%%
+        # Save the trained model and atom encoder
+        os.makedirs(os.path.dirname(model_path), exist_ok=True)
+        os.makedirs(os.path.dirname(atom_encoder_path), exist_ok=True)
 
-        #Check if the model and atom encoder exist
-        if os.path.exists(model_path) and os.path.exists(atom_encoder_path):
-            print(f"Loading existing model and atom encoder from {model_path} and {atom_encoder_path}")
-            atom_encoder = torch.load(atom_encoder_path, map_location=torch.device('cpu')).to(device)
-            best_model = torch.load(model_path, map_location=torch.device('cpu')).to(device)
+        torch.save(best_model, model_path)
+        torch.save(best_encoder, atom_encoder_path)
+        print(f"Model and atom encoder saved to {model_path} and {atom_encoder_path}")
 
-            best_model.eval()
-            atom_encoder.eval()
-        else:
+    test_dataset = [dataset[i] for i in split_idx['test']]
 
-            print("Model and atom encoder not found. Creating new ones.")
-            atom_encoder = model_module.AtomEncoder(args.hidden).to(device)
-            model = model_module.BasicGNN(args).to(device)
-        
-            # Train the model
-            test_auc, best_model, best_encoder = train_module.train_function(
-                dataset, split_idx, model, atom_encoder, args, device
-            )
-            # Save the trained model and atom encoder
-            os.makedirs(os.path.dirname(model_path), exist_ok=True)
-            os.makedirs(os.path.dirname(atom_encoder_path), exist_ok=True)
+    kf = KFold(n_splits=5, shuffle=True, random_state=42)
+    dataset_indices = list(range(len(dataset)))
+    fold_results = []
 
-            torch.save(best_model, model_path)
-            torch.save(best_encoder, atom_encoder_path)
-            print(f"Model and atom encoder saved to {model_path} and {atom_encoder_path}")
+    for fold, (train_idx, valid_idx) in enumerate(kf.split(dataset_indices)):
+        print(f"Starting fold {fold + 1}")
 
-        train_dataset = dataset[split_idx['train']]
-        valid_dataset = dataset[split_idx['valid']]
-        test_dataset = dataset[split_idx['test']]
+        train_dataset = [dataset[i] for i in train_idx]
+        valid_dataset = [dataset[i] for i in valid_idx]
 
         best_model = best_model.to(device)
 
-
         # ----- Node Embedding Computation -----
         embedding_list = [
-            best_model(atom_encoder(data.x.to(device)).to(device), data.edge_index.to(device), infer=True).detach() 
-            for data in test_dataset
+        best_model(atom_encoder(data.x.to(device)).to(device), data.edge_index.to(device), infer=True).detach() 
+        for data in valid_dataset
         ]
 
-        # Create directory for saving importance values
-        importance_dir = os.path.join('importance','v4', args.dataset, args.model, args.pooling,str(code_seed))
+        # Create directory for saving importance values for each fold
+        importance_dir = os.path.join('importance_path', args.dataset, args.model, args.pooling, f"fold_{fold + 1}", str(code_seed))
         os.makedirs(importance_dir, exist_ok=True)
 
         # ----- Group Lasso and Lasso Importance -----
         group_alpha_importance, best_reg_2, group_base, group_average, group_drop, best_node_number = optimize.find_best_group_alpha_importance(
-            test_dataset=test_dataset,
-            best_model=best_model,
-            atom_encoder=atom_encoder,
-            embedding_list=embedding_list,
-            device=device,
-            args=args,
-            test_func=test_module.test_model_with_noise,
-            reg_2_list=args.group_param,
+        test_dataset=valid_dataset,
+        best_model=best_model,
+        atom_encoder=atom_encoder,
+        embedding_list=embedding_list,
+        device=device,
+        args=args,
+        test_func=test_module.test_model_with_noise,
+        reg_2_list=args.group_param,
         )
-        with open(os.path.join(importance_dir, 'group_alpha_importance.pkl'), 'wb') as f:
-            pickle.dump(group_alpha_importance, f)
 
-        best_node_number = [int(0.3* len(i.x)) for i in test_dataset]
+        best_node_number = [int(0.3 * len(i.x)) for i in valid_dataset]
 
-
-        # # ----- Alpha Importance -----
+        # ----- Alpha Importance -----
         alpha_importance, best_reg_1, alpha_base, alpha_avg, alpha_drop, best_alpha_number = optimize.find_best_alpha_importance(
-            test_dataset=test_dataset,
-            best_model=best_model,
-            atom_encoder=atom_encoder,
-            embedding_list=embedding_list,
-            device=device,
-            args=args,
-            node_number=best_node_number,
-            test_func=test_module.test_model_with_noise,
-            reg_1_list=args.lasso_param,
+        test_dataset=valid_dataset,
+        best_model=best_model,
+        atom_encoder=atom_encoder,
+        embedding_list=embedding_list,
+        device=device,
+        args=args,
+        node_number=best_node_number,
+        test_func=test_module.test_model_with_noise,
+        reg_1_list=args.lasso_param,
         )
 
-        with open(os.path.join(importance_dir, 'alpha_importance.pkl'), 'wb') as f:
-            pickle.dump(alpha_importance, f)
 
-        # ----- Explanation Method Importance Calculation -----
-        # PGExplainer Importance
-        pg_node_importances = optimize.compute_pgexplainer_importance(test_dataset, best_model, atom_encoder)
-        pg_equalize_importances = optimize.equalize_group_alpha(pg_node_importances, test_dataset)
-        pg_node_number = optimize.select_motifs_by_node_ratio(pg_equalize_importances, test_dataset, sparsity_target=0.3)
-
-        with open(os.path.join(importance_dir, 'pg_node_importances.pkl'), 'wb') as f:
-            pickle.dump(pg_node_importances, f)
-
-        # Graph Mask Importance
-        graph_mask_importance = optimize.compute_graphmask_importance(test_dataset, best_model, atom_encoder)
-        graph_mask_equalize_importances = optimize.equalize_group_alpha(graph_mask_importance, test_dataset)
-        graph_mask_node_number = optimize.select_motifs_by_node_ratio(graph_mask_equalize_importances, test_dataset, sparsity_target=0.3)
-
-        with open(os.path.join(importance_dir, 'graph_mask_importance.pkl'), 'wb') as f:
-            pickle.dump(graph_mask_importance, f)
-
-        # Saliency Importance
-        sa_importance = optimize.compute_captum_importance(test_dataset, best_model, 'Saliency', atom_encoder)
-        sa_equalize_importances = optimize.equalize_group_alpha(sa_importance, test_dataset)
-        sa_node_number = optimize.select_motifs_by_node_ratio(sa_equalize_importances, test_dataset, sparsity_target=0.3)
-
-        with open(os.path.join(importance_dir, 'sa_importance.pkl'), 'wb') as f:
-            pickle.dump(sa_importance, f)
-
-        # Guided Backprop Importance
-        gbp_importance = optimize.compute_captum_importance(test_dataset, best_model, 'GuidedBackprop', atom_encoder)
-        gbp_equalize_importances = optimize.equalize_group_alpha(gbp_importance, test_dataset)
-        gbp_node_number = optimize.select_motifs_by_node_ratio(gbp_equalize_importances, test_dataset, sparsity_target=0.3)
-
-        with open(os.path.join(importance_dir, 'gbp_importance.pkl'), 'wb') as f:
-            pickle.dump(gbp_importance, f)
-        # SubgraphX Importance
-        subgraphx_node_number = [int(0.3* len(i.x)) for i in test_dataset]
-        subgraphx_importance = optimize.compute_subgraphx_importance(test_dataset, best_model, subgraphx_node_number, device, atom_encoder)
-        subgraphx_equalize_importances = optimize.equalize_group_alpha(subgraphx_importance, test_dataset)
-        subgraphx_node_number = optimize.select_motifs_by_node_ratio(subgraphx_equalize_importances, test_dataset, sparsity_target=0.3)
-
-        with open(os.path.join(importance_dir, 'subgraphx_importance.pkl'), 'wb') as f:
-            pickle.dump(subgraphx_importance, f)
-        best_model = best_model.to(device)
-        atom_encoder = atom_encoder.to(device)
-
-        # GNNExplainer Importance
-        gnn_explainer_importance = optimize.compute_gnnexplainer_importance(test_dataset, best_model, device, atom_encoder)
-        gnn_explainer_equalize_importances = optimize.equalize_group_alpha(gnn_explainer_importance, test_dataset)
-        gnn_explainer_node_number = optimize.select_motifs_by_node_ratio(gnn_explainer_equalize_importances, test_dataset, sparsity_target=0.3)
-
-        with open(os.path.join(importance_dir, 'gnn_explainer_importance.pkl'), 'wb') as f:
-            pickle.dump(gnn_explainer_importance, f)
-
-        # Grad-CAM Importance
-        gradcam_importance = optimize.compute_gradcam_importance(test_dataset, best_model, device, atom_encoder)
-        gradcam_equalize_importances = optimize.equalize_group_alpha(gradcam_importance, test_dataset)
-        gradcam_node_number = optimize.select_motifs_by_node_ratio(gradcam_equalize_importances, test_dataset, sparsity_target=0.3)
-
-        with open(os.path.join(importance_dir, 'gradcam_importance.pkl'), 'wb') as f:
-            pickle.dump(gradcam_importance, f)
-
-        # # ----- Robustness Testing with Noise Injection -----   
-        alpha_base , alpha_avg, alpha_drop = test_module.test_model_with_noise(best_model, test_dataset, device, best_node_number, alpha_importance, args, atom_encoder)   
-        grad_base, grad_avg, grad_drop = test_module.test_model_with_noise(best_model, test_dataset, device, best_node_number, gradcam_importance, args, atom_encoder)
-        gnn_base, gnn_avg, gnn_drop = test_module.test_model_with_noise(best_model, test_dataset, device, best_node_number, gnn_explainer_importance, args, atom_encoder)
-        sub_base, sub_avg, sub_drop = test_module.test_model_with_noise(best_model, test_dataset, device, best_node_number, subgraphx_importance, args, atom_encoder)
-        gbp_base, gbp_avg, gbp_drop = test_module.test_model_with_noise(best_model, test_dataset, device, best_node_number, gbp_importance, args, atom_encoder)
-        sa_base, sa_avg, sa_drop = test_module.test_model_with_noise(best_model, test_dataset, device, best_node_number, sa_importance, args, atom_encoder)
-        mask_base, mask_avg, mask_drop = test_module.test_model_with_noise(best_model, test_dataset, device, best_node_number, graph_mask_importance, args, atom_encoder)
-        pg_base, pg_avg, pg_drop = test_module.test_model_with_noise(best_model, test_dataset, device, best_node_number, pg_node_importances, args, atom_encoder)
-
-
-
-        # ----- Logging Results to Weights & Biases -----
-        wandb.config.update({
-            "reg_lasso": best_reg_1,
-            "reg_group_lasso": best_reg_2,
+        # Store results for this fold
+        fold_results.append({
+        "best_reg_1": best_reg_1,
+        "best_reg_2": best_reg_2,
+        "group_base": group_base,
+        "group_average": group_average,
+        "group_drop": group_drop,
+        "alpha_base": alpha_base,
+        "alpha_avg": alpha_avg,
+        "alpha_drop": alpha_drop,
         })
 
-        # Log results to wandb
-        wandb.log({
-            "Group Lasso": {"Base": group_base, "Average": group_average, "Drop": group_drop},
-            "Lasso": {"Base": alpha_base, "Average": alpha_avg, "Drop": alpha_drop},
-            "Grad-CAM": {"Base": grad_base, "Average": grad_avg, "Drop": grad_drop},
-            "GNNExplainer": {"Base": gnn_base, "Average": gnn_avg, "Drop": gnn_drop},
-            "SubgraphX": {"Base": sub_base, "Average": sub_avg, "Drop": sub_drop},
-            "Guided Backprop": {"Base": gbp_base, "Average": gbp_avg, "Drop": gbp_drop},
-            "Saliency": {"Base": sa_base, "Average": sa_avg, "Drop": sa_drop},
-            "Graph Mask": {"Base": mask_base, "Average": mask_avg, "Drop": mask_drop},
-            "PGExplainer": {"Base": pg_base, "Average": pg_avg, "Drop": pg_drop},
-        })
+    # Compute average lambda values across folds
+    avg_best_reg_1 = np.mean([result["best_reg_1"] for result in fold_results])
+    avg_best_reg_2 = np.mean([result["best_reg_2"] for result in fold_results])
 
-        wandb.finish()
+    # ----- Group Lasso and Lasso Importance -----
+    group_alpha_importance, best_reg_2, group_base, group_average, group_drop, best_node_number = optimize.find_best_group_alpha_importance(
+    test_dataset=test_dataset,
+    best_model=best_model,
+    atom_encoder=atom_encoder,
+    embedding_list=embedding_list,
+    device=device,
+    args=args,
+    test_func=test_module.test_model_with_noise,
+    reg_2_list=[avg_best_reg_2],
+    )
+
+    with open(os.path.join(importance_dir, 'group_alpha_importance.pkl'), 'wb') as f:
+        pickle.dump(group_alpha_importance, f)
+
+    alpha_importance, best_reg_1, alpha_base, alpha_avg, alpha_drop, best_alpha_number = optimize.find_best_alpha_importance(
+    test_dataset=test_dataset,
+    best_model=best_model,
+    atom_encoder=atom_encoder,
+    embedding_list=embedding_list,
+    device=device,
+    args=args,
+    node_number=best_node_number,
+    test_func=test_module.test_model_with_noise,
+    reg_1_list=[avg_best_reg_1],
+    )
+
+    with open(os.path.join(importance_dir, 'alpha_importance.pkl'), 'wb') as f:
+        pickle.dump(alpha_importance, f)
+
+
+    # ----- Explanation Method Importance Calculation -----
+    # PGExplainer Importance
+    pg_node_importances = optimize.compute_pgexplainer_importance(test_dataset, best_model, atom_encoder)
+    pg_equalize_importances = optimize.equalize_group_alpha(pg_node_importances, test_dataset)
+    pg_node_number = optimize.select_motifs_by_node_ratio(pg_equalize_importances, test_dataset, sparsity_target=0.3)
+
+    with open(os.path.join(importance_dir, 'pg_node_importances.pkl'), 'wb') as f:
+        pickle.dump(pg_node_importances, f)
+
+    # Graph Mask Importance
+    graph_mask_importance = optimize.compute_graphmask_importance(test_dataset, best_model, atom_encoder)
+    graph_mask_equalize_importances = optimize.equalize_group_alpha(graph_mask_importance, test_dataset)
+    graph_mask_node_number = optimize.select_motifs_by_node_ratio(graph_mask_equalize_importances, test_dataset, sparsity_target=0.3)
+
+    with open(os.path.join(importance_dir, 'graph_mask_importance.pkl'), 'wb') as f:
+        pickle.dump(graph_mask_importance, f)
+
+    # Saliency Importance
+    sa_importance = optimize.compute_captum_importance(test_dataset, best_model, 'Saliency', atom_encoder)
+    sa_equalize_importances = optimize.equalize_group_alpha(sa_importance, test_dataset)
+    sa_node_number = optimize.select_motifs_by_node_ratio(sa_equalize_importances, test_dataset, sparsity_target=0.3)
+
+    with open(os.path.join(importance_dir, 'sa_importance.pkl'), 'wb') as f:
+        pickle.dump(sa_importance, f)
+
+    # Guided Backprop Importance
+    gbp_importance = optimize.compute_captum_importance(test_dataset, best_model, 'GuidedBackprop', atom_encoder)
+    gbp_equalize_importances = optimize.equalize_group_alpha(gbp_importance, test_dataset)
+    gbp_node_number = optimize.select_motifs_by_node_ratio(gbp_equalize_importances, test_dataset, sparsity_target=0.3)
+
+    with open(os.path.join(importance_dir, 'gbp_importance.pkl'), 'wb') as f:
+        pickle.dump(gbp_importance, f)
+    # SubgraphX Importance
+    subgraphx_node_number = [int(0.3* len(i.x)) for i in test_dataset]
+    subgraphx_importance = optimize.compute_subgraphx_importance(test_dataset, best_model, subgraphx_node_number, device, atom_encoder)
+    subgraphx_equalize_importances = optimize.equalize_group_alpha(subgraphx_importance, test_dataset)
+    subgraphx_node_number = optimize.select_motifs_by_node_ratio(subgraphx_equalize_importances, test_dataset, sparsity_target=0.3)
+
+    with open(os.path.join(importance_dir, 'subgraphx_importance.pkl'), 'wb') as f:
+        pickle.dump(subgraphx_importance, f)
+    best_model = best_model.to(device)
+    atom_encoder = atom_encoder.to(device)
+
+    # GNNExplainer Importance
+    gnn_explainer_importance = optimize.compute_gnnexplainer_importance(test_dataset, best_model, device, atom_encoder)
+    gnn_explainer_equalize_importances = optimize.equalize_group_alpha(gnn_explainer_importance, test_dataset)
+    gnn_explainer_node_number = optimize.select_motifs_by_node_ratio(gnn_explainer_equalize_importances, test_dataset, sparsity_target=0.3)
+
+    with open(os.path.join(importance_dir, 'gnn_explainer_importance.pkl'), 'wb') as f:
+        pickle.dump(gnn_explainer_importance, f)
+
+    # Grad-CAM Importance
+    gradcam_importance = optimize.compute_gradcam_importance(test_dataset, best_model, device, atom_encoder)
+    gradcam_equalize_importances = optimize.equalize_group_alpha(gradcam_importance, test_dataset)
+    gradcam_node_number = optimize.select_motifs_by_node_ratio(gradcam_equalize_importances, test_dataset, sparsity_target=0.3)
+
+    with open(os.path.join(importance_dir, 'gradcam_importance.pkl'), 'wb') as f:
+        pickle.dump(gradcam_importance, f)
+
+    # # ----- Robustness Testing with Noise Injection -----   
+    alpha_base , alpha_avg, alpha_drop = test_module.test_model_with_noise(best_model, test_dataset, device, best_node_number, alpha_importance, args, atom_encoder)   
+    grad_base, grad_avg, grad_drop = test_module.test_model_with_noise(best_model, test_dataset, device, best_node_number, gradcam_importance, args, atom_encoder)
+    gnn_base, gnn_avg, gnn_drop = test_module.test_model_with_noise(best_model, test_dataset, device, best_node_number, gnn_explainer_importance, args, atom_encoder)
+    sub_base, sub_avg, sub_drop = test_module.test_model_with_noise(best_model, test_dataset, device, best_node_number, subgraphx_importance, args, atom_encoder)
+    gbp_base, gbp_avg, gbp_drop = test_module.test_model_with_noise(best_model, test_dataset, device, best_node_number, gbp_importance, args, atom_encoder)
+    sa_base, sa_avg, sa_drop = test_module.test_model_with_noise(best_model, test_dataset, device, best_node_number, sa_importance, args, atom_encoder)
+    mask_base, mask_avg, mask_drop = test_module.test_model_with_noise(best_model, test_dataset, device, best_node_number, graph_mask_importance, args, atom_encoder)
+    pg_base, pg_avg, pg_drop = test_module.test_model_with_noise(best_model, test_dataset, device, best_node_number, pg_node_importances, args, atom_encoder)
+
+
+
+    # ----- Logging Results to Weights & Biases -----
+    wandb.config.update({
+        "reg_lasso": best_reg_1,
+        "reg_group_lasso": best_reg_2,
+    })
+
+    # Log results to wandb
+    wandb.log({
+        "Group Lasso": {"Base": group_base, "Average": group_average, "Drop": group_drop},
+        "Lasso": {"Base": alpha_base, "Average": alpha_avg, "Drop": alpha_drop},
+        "Grad-CAM": {"Base": grad_base, "Average": grad_avg, "Drop": grad_drop},
+        "GNNExplainer": {"Base": gnn_base, "Average": gnn_avg, "Drop": gnn_drop},
+        "SubgraphX": {"Base": sub_base, "Average": sub_avg, "Drop": sub_drop},
+        "Guided Backprop": {"Base": gbp_base, "Average": gbp_avg, "Drop": gbp_drop},
+        "Saliency": {"Base": sa_base, "Average": sa_avg, "Drop": sa_drop},
+        "Graph Mask": {"Base": mask_base, "Average": mask_avg, "Drop": mask_drop},
+        "PGExplainer": {"Base": pg_base, "Average": pg_avg, "Drop": pg_drop},
+    })
+
+    wandb.finish()
 
 
 if __name__ == "__main__":
