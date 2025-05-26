@@ -28,30 +28,6 @@ class AtomEncoder(torch.nn.Module):
 
         return x_embedding
 
-# class AtomEncoder(torch.nn.Module):
-
-#     def __init__(self, emb_dim):
-#         super(AtomEncoder, self).__init__()
-        
-#         self.atom_mlp_list = torch.nn.ModuleList()
-#         for i, dim in enumerate(full_atom_feature_dims):
-            
-#             mlp = nn.Sequential(
-#                 nn.Linear(1, 2 * emb_dim),  # 🔥 dim+1 → 1
-#                 nn.ReLU(),
-#                 nn.Linear(2 * emb_dim, emb_dim)
-#             )
-                    
-#             torch.nn.init.xavier_uniform_(mlp[0].weight)  # 첫 번째 레이어 초기화
-#             torch.nn.init.xavier_uniform_(mlp[2].weight)  # 두 번째 레이어 초기화
-#             self.atom_mlp_list.append(mlp)
-
-#     def forward(self, x):
-#         x_embedding = 0
-#         for i in range(x.shape[1]):
-#             x_embedding += self.atom_mlp_list[i](x[:, i].unsqueeze(-1).float())  # MLP에 입력 전달
-
-#         return x_embedding
 
 
 class MLP_layer(nn.Module):
@@ -140,11 +116,11 @@ class BasicGNN(nn.Module):
             x = self.global_pool(x, batch)
         else:
             if self.args.pooling == 'max':
-                x = x.max(dim=0, keepdim=True)[0]  # Batch가 없을 경우 max pooling
+                x = x.max(dim=0, keepdim=True)[0]  
             elif self.args.pooling == 'mean':
-                x = x.mean(dim=0, keepdim=True)  # Batch가 없을 경우 mean pooling
+                x = x.mean(dim=0, keepdim=True)  
             elif self.args.pooling == 'sum':
-                x = x.sum(dim=0, keepdim=True)  # Batch가 없을 경우 sum pooling
+                x = x.sum(dim=0, keepdim=True)  
         
         logit = self.readout_layer(x)
         if self.flatten_out_shape:
