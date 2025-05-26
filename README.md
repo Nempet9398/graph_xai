@@ -20,6 +20,7 @@ This repository provides the implementation for evaluating node, subgraph-level 
 python main.py --dataset MUTAG --model GCN --pooling mean 
 ```
 
+main.py for subgraph level, main_graph.py for node level and gt_test.py for ground-truth test
 Key arguments:
 - `--group_param`: Group Lasso regularization values
 - `--lasso_param`: L1 regularization values
