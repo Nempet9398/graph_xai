@@ -41,7 +41,7 @@ def optimize_normal_graph(data, test_data, device, args):
         return None
 
     data = data.to(device)
-    embedding = data  # 이미 임베딩된 상태
+    embedding = data  
 
     n = embedding.shape[0]
 
@@ -165,7 +165,7 @@ def optimize_one_graph(data, test_data, device, args):
         return None
 
     data = data.to(device)
-    embedding = data  # 이미 임베딩된 상태
+    embedding = data  
 
     n = embedding.shape[0]
 
@@ -209,10 +209,6 @@ def compute_alpha_importance_parallel(embedding_list,  test_dataset, device, arg
             results[i] = res
 
     return [r for r in results if r is not None]
-
-# =============================================================================
-# 1.2 alpha 구하기 함수화
-# =============================================================================
 
 def find_best_alpha_importance(
         test_dataset,
@@ -342,7 +338,7 @@ def find_best_alpha_connectivity(
 
     for reg_1 in reg_1_list:
         args.reg_1 = reg_1
-        for lambda_conn in [0.1, 1.0, 5.0]:  # ✅ 연결 정규화 계수도 튜닝
+        for lambda_conn in [0.1, 1.0, 5.0]:  
             args.reg_conn = lambda_conn
 
             alpha_importance = compute_alpha_connectivity_parallel(
@@ -625,7 +621,7 @@ def compute_pgexplainer_importance(test_dataset, model, atom_encoder=None):
 
     loader = DataLoader(test_dataset, batch_size=32, shuffle=True) #, atom_encoder=None)
 
-    # PGExplainer 학습
+
     model.to('cpu').eval()
     if atom_encoder is not None:\
         atom_encoder.to('cpu').eval()
@@ -678,13 +674,13 @@ def compute_pgexplainer_importance(test_dataset, model, atom_encoder=None):
 
 
 def compute_graphmask_importance(test_dataset, model, atom_encoder=None):
-    # 🟨 여기서 GINConv에 in_channels 넣어주기
+
     for module in model.modules():
         if isinstance(module, GINConv):
             if not hasattr(module, 'in_channels'):
-                module.in_channels = module.nn[0].in_features  # 첫 Linear의 입력 차원
+                module.in_channels = module.nn[0].in_features  
             if not hasattr(module, 'out_channels'):
-                module.out_channels = module.nn[-1].out_features  # 마지막 Linear의 출력 차원
+                module.out_channels = module.nn[-1].out_features  
 
     explainer = Explainer(
         model=model,
