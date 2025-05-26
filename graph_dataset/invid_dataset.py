@@ -32,15 +32,14 @@ def create_ba_graph_with_motif(motif_type: str):
     G.add_nodes_from(motif_nodes)
     G.add_edges_from(motif_edges)
 
-    # motif를 BA 그래프에 연결
     attach_node = random.choice(range(node_offset))
     G.add_edge(attach_node, motif_nodes[0])
 
-    # PyG 변환
+
     edge_index = torch.tensor(list(G.edges), dtype=torch.long).t().contiguous()
     edge_index = torch.cat([edge_index, edge_index[[1, 0], :]], dim=1)
 
-    x = torch.randn(G.number_of_nodes(), 10)  # 랜덤 피처
+    x = torch.randn(G.number_of_nodes(), 10) 
     y = torch.tensor([label], dtype=torch.long)
 
     return Data(x=x, edge_index=edge_index, y=y)
