@@ -279,17 +279,17 @@ def add_fragment_labels_to_data(data):
     Returns:
     - data: Updated PyG Data object with `data.fragment_labels` added.
     """
-    smiles = data.smiles  # SMILES 문자열 가져오기
+    smiles = data.smiles  
     mol = Chem.MolFromSmiles(smiles)
 
     if mol is None:
         raise ValueError("Invalid SMILES string")
 
-    # BRICS로 분해된 분자 조각 가져오기
+
     fragments = BRICS.BreakBRICSBonds(mol)
     frag_mols = Chem.GetMolFrags(fragments, asMols=True)
 
-    # 각 노드(원자)에 대해 fragment 라벨을 저장할 텐서
+
     fragment_labels = torch.full((data.num_nodes,), -1, dtype=torch.long)
 
     fragment_id_map = {}  # {fragment_SMILES: fragment_ID}
@@ -311,7 +311,6 @@ def add_fragment_labels_to_data(data):
                 fragment_labels[atom_idx] = frag_id
                 assigned_atoms.add(atom_idx)
 
-    # 분해되지 않은 원자는 자기 자신만의 fragment로 할당
     for atom_idx in range(data.num_nodes):
         if atom_idx not in assigned_atoms:
             fragment_labels[atom_idx] = fragment_counter
@@ -323,8 +322,6 @@ def add_fragment_labels_to_data(data):
 
 
 
-#%%
-### 3️⃣ 그래프 시각화 (Node 기반 중요도 적용)
 def visualize_nodes_with_heatmap(data, node_importance):
     """
     Visualizes the given graph data with heatmap using node importance.
@@ -353,26 +350,24 @@ def visualize_nodes_with_heatmap(data, node_importance):
 
 
 def visualize_graph_with_clique(test_dataset, index):
-    # 테스트 데이터셋 중 하나를 가져옵니다.
+
     data = test_dataset[index]
 
-    # NetworkX 그래프로 변환합니다.
+
     G = to_networkx(data, to_undirected=True)
 
-    # 클리크 정보를 가져옵니다.
     clique_info = data.clique
     print(clique_info)
-    # 노드에서 클리크 인덱스로의 매핑을 생성합니다.
+
     node_to_clique = {
         node: clique_index
         for clique_index, clique in enumerate(clique_info)
         for node in clique
     }
 
-    # Kawai 레이아웃을 사용하여 그래프를 그립니다.
     pos = nx.kamada_kawai_layout(G)
 
-    # 클리크 정보를 기반으로 색상을 지정하여 노드를 그립니다.
+
     node_colors = [node_to_clique[node] for node in G.nodes()]
     cmap = plt.get_cmap('tab20', max(node_colors) + 1)
 
