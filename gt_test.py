@@ -95,7 +95,7 @@ def main(args):
             continue
         
         device = args.device
-        args.lasso_param = [0.01,0.05,0.1,0.5,1,5,10,15,20,25,30,40,50]
+        args.lasso_param = [0.01,0.05,0.1,0.5,1,5,10]
         embedding_list = [
             best_model(atom_encoder(data.x.to(device)).to(device), data.edge_index.to(device), infer=True).detach() 
             for data in filtered_dataset
