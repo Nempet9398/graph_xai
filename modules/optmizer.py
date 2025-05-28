@@ -80,7 +80,7 @@ def compute_normal_importance_parallel(embedding_list,  test_dataset, device, ar
 
     with ThreadPoolExecutor(max_workers=n_jobs) as executor:
         futures = [executor.submit(worker, i) for i in range(len(test_dataset))]
-        for f in tqdm(as_completed(futures), total=len(futures), desc="GPU 병렬 L1 최적화 중"):
+        for f in tqdm(as_completed(futures), total=len(futures), desc="GPU L1 "):
             i, res = f.result()
             results[i] = res
 
@@ -204,7 +204,7 @@ def compute_alpha_importance_parallel(embedding_list,  test_dataset, device, arg
 
     with ThreadPoolExecutor(max_workers=n_jobs) as executor:
         futures = [executor.submit(worker, i) for i in range(len(test_dataset))]
-        for f in tqdm(as_completed(futures), total=len(futures), desc="GPU 병렬 L1 최적화 중"):
+        for f in tqdm(as_completed(futures), total=len(futures), desc="GPU L1"):
             i, res = f.result()
             results[i] = res
 
@@ -314,7 +314,7 @@ def compute_alpha_connectivity_parallel(embedding_list, test_dataset, device, ar
 
     with ThreadPoolExecutor(max_workers=n_jobs) as executor:
         futures = [executor.submit(worker, i) for i in range(len(test_dataset))]
-        for f in tqdm(as_completed(futures), total=len(futures), desc="GPU 병렬 연결 제약 최적화 중"):
+        for f in tqdm(as_completed(futures), total=len(futures), desc="GPU "):
             i, res = f.result()
             results[i] = res
 
@@ -429,7 +429,7 @@ def compute_group_alpha_importance_parallel(embedding_list, test_dataset, device
 
     with ThreadPoolExecutor(max_workers=n_jobs) as executor:
         futures = [executor.submit(worker, i) for i in range(len(test_dataset))]
-        for f in tqdm(as_completed(futures), total=len(futures), desc="GPU 병렬 최적화 중"):
+        for f in tqdm(as_completed(futures), total=len(futures), desc="GPU"):
             i, res = f.result()
             results[i] = res
 
