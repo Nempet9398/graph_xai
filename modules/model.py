@@ -105,7 +105,7 @@ class BasicGNN(nn.Module):
         if silence_node is not None: 
             x[silence_node] = torch.zeros_like(x[silence_node])
         
-        # 그래프 전체 representation 생성
+
         for conv in self.convs:
             x = conv(x, edge_index)        
 
