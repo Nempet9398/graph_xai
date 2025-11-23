@@ -1,4 +1,4 @@
-# eXEL Structural Explanation of Graph Neural Networks via Embedding-Space Lasso Regression
+# Estimating Subgraph Importance with Structural Prior Domain Knowledge
 
 This repository provides the implementation for evaluating node, subgraph-level explanations in graph classification tasks. We propose a **(Group-) Lasso-based explanation method** and benchmark it against existing XAI methods such as **Grad-CAM**, **GNNExplainer**, **PGExplainer**, **SubgraphX**, **GraphMask**, **Saliency**, and **Guided Backpropagation**.
 
