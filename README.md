@@ -2,8 +2,7 @@
 
 This repository provides the official implementation of our PAKDD 2026 paper: **Estimating Subgraph Importance with Structural Prior Domain Knowledge** (Pacific-Asia Conference on Knowledge Discovery and Data Mining (PAKDD), 2026).
 
-> **Abstract**
-> We introduce a structural-prior-aware explanation method for graph classification. Unlike conventional node-level attribution methods that treat nodes independently, our approach leverages *group-wise sparsity regularization (Group Lasso)* to estimate subgraph-level importance in a principled manner.
+> **Abstract**: We introduce a structural-prior-aware explanation method for graph classification. Unlike conventional node-level attribution methods that treat nodes independently, our approach leverages *group-wise sparsity regularization (Group Lasso)* to estimate subgraph-level importance in a principled manner.
 
 ---
 
@@ -50,8 +49,6 @@ python gt_test.py --dataset MUTAG
 └── importance/          # Saved importance scores
 ```
 
----
-
 ### Output Structure
 
 Results are stored in:
@@ -62,18 +59,18 @@ Results are stored in:
 
 Each directory contains:
 
-- Importance scores (.pkl)  
-- Robustness evaluation metrics  
-- Visualization files (if enabled)  
+- Importance scores (.pkl)
+- Robustness evaluation metrics
+- Visualization files (if enabled)
 
 > All experiment logs are tracked using *Weights & Biases (wandb)* for reproducibility and comparison.
 
 
 ### Reproducibility
 
-- Random seed control supported  
-- Deterministic training option available  
-- Full experiment logs tracked via wandb  
+- Random seed control supported
+- Deterministic training option available
+- Full experiment logs tracked via wandb
 
 ---
 
