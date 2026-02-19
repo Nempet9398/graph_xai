@@ -9,22 +9,11 @@ This repository provides the official implementation of our PAKDD 2026 paper: **
 
 ### Experimental Settings
 
-* Datasets
-    - MUTAG, TOX21, alkane, benzene, fluoride, ames  
-
-* Backbone Models
-    - GCN, GIN, GAT  
-
-* Pooling strategies
-    - mean, sum, max
-
-* Baselines
-    - Grad-CAM, GNNExplainer, PGExplainer, SubgraphX, GraphMask, Saliency, Guided Backpropagation (GBP)
-
-* Evaluation
-    - Node-level, Subgraph-level, Ground-truth validation
-
----
+* Datasets: MUTAG, TOX21, alkane, benzene, fluoride, ames  
+* Backbone Models: GCN, GIN, GAT  
+* Pooling strategies: mean, sum, max
+* Baselines: Grad-CAM, GNNExplainer, PGExplainer, SubgraphX, GraphMask, Saliency, Guided Backpropagation (GBP)
+* Evaluation: Node-level, Subgraph-level, Ground-truth validation
 
 ### Usage
 
@@ -44,6 +33,23 @@ python gt_test.py --dataset MUTAG
     - `--group_param`: Group Lasso regularization strength
     - `--lasso_param`: L1 regularization strength
 
+### Dependencies
+- PyTorch, PyTorch Geometric, Captum, wandb, NetworkX, Seaborn, RDKit (for molecular datasets)
+
+### Repository Structure
+
+```
+.
+├── main.py              # Subgraph-level explanation pipeline
+├── main_graph.py        # Node-level explanation pipeline
+├── gt_test.py           # Ground-truth validation
+├── graph_dataset/       # Dataset loaders
+├── modules/             # Models and training
+├── xai_test/            # Explanation & robustness evaluation
+├── utils/               # Utility functions
+└── importance/          # Saved importance scores
+```
+
 ---
 
 ### Output Structure
@@ -62,34 +68,12 @@ Each directory contains:
 
 > All experiment logs are tracked using *Weights & Biases (wandb)* for reproducibility and comparison.
 
----
 
 ### Reproducibility
 
 - Random seed control supported  
 - Deterministic training option available  
 - Full experiment logs tracked via wandb  
-
----
-
-### Dependencies
-- PyTorch, PyTorch Geometric, Captum, wandb, NetworkX, Seaborn, RDKit (for molecular datasets)  
-
----
-
-### Repository Structure
-
-```
-.
-├── main.py              # Subgraph-level explanation pipeline
-├── main_graph.py        # Node-level explanation pipeline
-├── gt_test.py           # Ground-truth validation
-├── graph_dataset/       # Dataset loaders
-├── modules/             # Models and training
-├── xai_test/            # Explanation & robustness evaluation
-├── utils/               # Utility functions
-└── importance/          # Saved importance scores
-```
 
 ---
 
@@ -105,8 +89,6 @@ If you use this code in your research, please cite:
   year={2026}
 }
 ```
-
----
 
 ### Contact
 
